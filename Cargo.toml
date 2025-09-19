@@ -1,0 +1,9 @@
+[package]
+name = "sexpr"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nom = "7.1"
+thiserror = "1.0"
+rustyline = "13.0"
