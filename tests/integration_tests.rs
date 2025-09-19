@@ -14,20 +14,20 @@ fn eval_fresh(input: &str) -> Result<Value, SchemeError> {
 
 #[test]
 fn test_basic_arithmetic() {
-    assert_eq!(eval_fresh("(+ 1 2 3)").unwrap(), Value::Number(6.0));
-    assert_eq!(eval_fresh("(- 10 3 2)").unwrap(), Value::Number(5.0));
-    assert_eq!(eval_fresh("(* 2 3 4)").unwrap(), Value::Number(24.0));
-    assert_eq!(eval_fresh("(/ 12 3)").unwrap(), Value::Number(4.0));
+    assert_eq!(eval_fresh("(+ 1 2 3)").unwrap(), Value::Number(6));
+    assert_eq!(eval_fresh("(- 10 3 2)").unwrap(), Value::Number(5));
+    assert_eq!(eval_fresh("(* 2 3 4)").unwrap(), Value::Number(24));
+    assert_eq!(eval_fresh("(/ 12 3)").unwrap(), Value::Number(4));
     
     // Test unary operators
-    assert_eq!(eval_fresh("(- 5)").unwrap(), Value::Number(-5.0));
-    assert_eq!(eval_fresh("(/ 4)").unwrap(), Value::Number(0.25));
+    assert_eq!(eval_fresh("(- 5)").unwrap(), Value::Number(-5));
+    // Note: unary division (/ 4) no longer supported with integers
 }
 
 #[test]
 fn test_nested_arithmetic() {
-    assert_eq!(eval_fresh("(+ (* 2 3) (- 8 2))").unwrap(), Value::Number(12.0));
-    assert_eq!(eval_fresh("(* (+ 1 2) (- 5 2))").unwrap(), Value::Number(9.0));
+    assert_eq!(eval_fresh("(+ (* 2 3) (- 8 2))").unwrap(), Value::Number(12));
+    assert_eq!(eval_fresh("(* (+ 1 2) (- 5 2))").unwrap(), Value::Number(9));
 }
 
 #[test]
@@ -43,14 +43,14 @@ fn test_comparisons() {
 #[test]
 fn test_list_operations() {
     assert_eq!(eval_fresh("(list 1 2 3)").unwrap(), 
-               Value::List(vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]));
+               Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]));
     
-    assert_eq!(eval_fresh("(car (list 1 2 3))").unwrap(), Value::Number(1.0));
+    assert_eq!(eval_fresh("(car (list 1 2 3))").unwrap(), Value::Number(1));
     assert_eq!(eval_fresh("(cdr (list 1 2 3))").unwrap(),
-               Value::List(vec![Value::Number(2.0), Value::Number(3.0)]));
+               Value::List(vec![Value::Number(2), Value::Number(3)]));
     
     assert_eq!(eval_fresh("(cons 0 (list 1 2))").unwrap(),
-               Value::List(vec![Value::Number(0.0), Value::Number(1.0), Value::Number(2.0)]));
+               Value::List(vec![Value::Number(0), Value::Number(1), Value::Number(2)]));
     
     assert_eq!(eval_fresh("(null? ())").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("(null? (list 1))").unwrap(), Value::Bool(false));
@@ -60,9 +60,9 @@ fn test_list_operations() {
 fn test_quote() {
     assert_eq!(eval_fresh("(quote hello)").unwrap(), Value::Symbol("hello".to_string()));
     assert_eq!(eval_fresh("(quote (1 2 3))").unwrap(),
-               Value::List(vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]));
+               Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]));
     assert_eq!(eval_fresh("(quote (+ 1 2))").unwrap(),
-               Value::List(vec![Value::Symbol("+".to_string()), Value::Number(1.0), Value::Number(2.0)]));
+               Value::List(vec![Value::Symbol("+".to_string()), Value::Number(1), Value::Number(2)]));
 }
 
 #[test]
@@ -71,21 +71,21 @@ fn test_define_and_variables() {
     
     // Define a variable
     eval_string("(define x 42)", &mut env).unwrap();
-    assert_eq!(eval_string("x", &mut env).unwrap(), Value::Number(42.0));
+    assert_eq!(eval_string("x", &mut env).unwrap(), Value::Number(42));
     
     // Use variable in expressions
-    assert_eq!(eval_string("(+ x 8)", &mut env).unwrap(), Value::Number(50.0));
+    assert_eq!(eval_string("(+ x 8)", &mut env).unwrap(), Value::Number(50));
     
     // Redefine variable
     eval_string("(define x 100)", &mut env).unwrap();
-    assert_eq!(eval_string("x", &mut env).unwrap(), Value::Number(100.0));
+    assert_eq!(eval_string("x", &mut env).unwrap(), Value::Number(100));
 }
 
 #[test]
 fn test_if_expressions() {
-    assert_eq!(eval_fresh("(if #t 1 2)").unwrap(), Value::Number(1.0));
-    assert_eq!(eval_fresh("(if #f 1 2)").unwrap(), Value::Number(2.0));
-    assert_eq!(eval_fresh("(if #t 1)").unwrap(), Value::Number(1.0));
+    assert_eq!(eval_fresh("(if #t 1 2)").unwrap(), Value::Number(1));
+    assert_eq!(eval_fresh("(if #f 1 2)").unwrap(), Value::Number(2));
+    assert_eq!(eval_fresh("(if #t 1)").unwrap(), Value::Number(1));
     assert_eq!(eval_fresh("(if #f 1)").unwrap(), Value::Nil);
     
     // Test with expressions
@@ -101,15 +101,15 @@ fn test_lambda_and_function_calls() {
     
     // Define a simple lambda
     eval_string("(define square (lambda (x) (* x x)))", &mut env).unwrap();
-    assert_eq!(eval_string("(square 5)", &mut env).unwrap(), Value::Number(25.0));
+    assert_eq!(eval_string("(square 5)", &mut env).unwrap(), Value::Number(25));
     
     // Lambda with multiple parameters
     eval_string("(define add (lambda (a b) (+ a b)))", &mut env).unwrap();
-    assert_eq!(eval_string("(add 3 4)", &mut env).unwrap(), Value::Number(7.0));
+    assert_eq!(eval_string("(add 3 4)", &mut env).unwrap(), Value::Number(7));
     
     // Lambda with no parameters
     eval_string("(define get-answer (lambda () 42))", &mut env).unwrap();
-    assert_eq!(eval_string("(get-answer)", &mut env).unwrap(), Value::Number(42.0));
+    assert_eq!(eval_string("(get-answer)", &mut env).unwrap(), Value::Number(42));
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn test_higher_order_functions() {
     eval_string("(define twice (lambda (f x) (f (f x))))", &mut env).unwrap();
     eval_string("(define inc (lambda (x) (+ x 1)))", &mut env).unwrap();
     
-    assert_eq!(eval_string("(twice inc 5)", &mut env).unwrap(), Value::Number(7.0));
+    assert_eq!(eval_string("(twice inc 5)", &mut env).unwrap(), Value::Number(7));
 }
 
 #[test]
@@ -132,12 +132,12 @@ fn test_lexical_scoping() {
     eval_string("(define make-adder (lambda (n) (lambda (x) (+ x n))))", &mut env).unwrap();
     eval_string("(define add5 (make-adder 5))", &mut env).unwrap();
     
-    assert_eq!(eval_string("(add5 3)", &mut env).unwrap(), Value::Number(8.0));
+    assert_eq!(eval_string("(add5 3)", &mut env).unwrap(), Value::Number(8));
     
     // Test parameter shadowing
     eval_string("(define f (lambda (x) (lambda (x) (* x 2))))", &mut env).unwrap();
     eval_string("(define g (f 10))", &mut env).unwrap();
-    assert_eq!(eval_string("(g 3)", &mut env).unwrap(), Value::Number(6.0));
+    assert_eq!(eval_string("(g 3)", &mut env).unwrap(), Value::Number(6));
 }
 
 #[test]
@@ -155,11 +155,11 @@ fn test_recursive_functions() {
     
     // Define factorial function
     eval_string("(define factorial (lambda (n) (if (= n 0) 1 (* n (factorial (- n 1))))))", &mut env).unwrap();
-    assert_eq!(eval_string("(factorial 5)", &mut env).unwrap(), Value::Number(120.0));
+    assert_eq!(eval_string("(factorial 5)", &mut env).unwrap(), Value::Number(120));
     
     // Define fibonacci function  
     eval_string("(define fib (lambda (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))", &mut env).unwrap();
-    assert_eq!(eval_string("(fib 6)", &mut env).unwrap(), Value::Number(8.0));
+    assert_eq!(eval_string("(fib 6)", &mut env).unwrap(), Value::Number(8));
     */
 }
 
@@ -169,11 +169,11 @@ fn test_complex_expressions() {
     
     // Complex nested expression
     let expr = "(((lambda (x) (lambda (y) (+ x y))) 10) 5)";
-    assert_eq!(eval_string(expr, &mut env).unwrap(), Value::Number(15.0));
+    assert_eq!(eval_string(expr, &mut env).unwrap(), Value::Number(15));
     
     // Simple list processing (non-recursive version)
     eval_string("(define first (lambda (lst) (car lst)))", &mut env).unwrap();
-    assert_eq!(eval_string("(first (list 1 2 3 4))", &mut env).unwrap(), Value::Number(1.0));
+    assert_eq!(eval_string("(first (list 1 2 3 4))", &mut env).unwrap(), Value::Number(1));
     
     // Test list construction and access
     eval_string("(define make-pair (lambda (a b) (list a b)))", &mut env).unwrap();
@@ -181,7 +181,7 @@ fn test_complex_expressions() {
     eval_string("(define get-second (lambda (pair) (car (cdr pair))))", &mut env).unwrap();
     
     eval_string("(define my-pair (make-pair 42 \"hello\"))", &mut env).unwrap();
-    assert_eq!(eval_string("(get-first my-pair)", &mut env).unwrap(), Value::Number(42.0));
+    assert_eq!(eval_string("(get-first my-pair)", &mut env).unwrap(), Value::Number(42));
     assert_eq!(eval_string("(get-second my-pair)", &mut env).unwrap(), Value::String("hello".to_string()));
 }
 
@@ -221,22 +221,36 @@ fn test_error_cases() {
         Err(SchemeError::ParseError(_)) => (),
         _ => panic!("Expected parse error for unclosed parenthesis"),
     }
+    
+    // Unbound variables (including unsupported special forms)
+    match eval_fresh("(set! x 42)") {
+        Err(SchemeError::UnboundVariable(var)) => {
+            assert_eq!(var, "set!");
+        },
+        _ => panic!("Expected unbound variable error for set!"),
+    }
+    
+    // Test integer division limitations
+    match eval_fresh("(/ 4)") {
+        Err(SchemeError::EvalError(_)) => (),
+        _ => panic!("Expected error for unary integer division"),
+    }
 }
 
 #[test]
 fn test_truthiness() {
     // In Scheme, only #f and () are falsy, everything else is truthy
-    assert_eq!(eval_fresh("(if #f 1 2)").unwrap(), Value::Number(2.0));
-    assert_eq!(eval_fresh("(if () 1 2)").unwrap(), Value::Number(2.0));
-    assert_eq!(eval_fresh("(if 0 1 2)").unwrap(), Value::Number(1.0));
-    assert_eq!(eval_fresh("(if \"\" 1 2)").unwrap(), Value::Number(1.0));
-    assert_eq!(eval_fresh("(if (list) 1 2)").unwrap(), Value::Number(2.0)); // empty list is falsy
+    assert_eq!(eval_fresh("(if #f 1 2)").unwrap(), Value::Number(2));
+    assert_eq!(eval_fresh("(if () 1 2)").unwrap(), Value::Number(2));
+    assert_eq!(eval_fresh("(if 0 1 2)").unwrap(), Value::Number(1));
+    assert_eq!(eval_fresh("(if \"\" 1 2)").unwrap(), Value::Number(1));
+    assert_eq!(eval_fresh("(if (list) 1 2)").unwrap(), Value::Number(2)); // empty list is falsy
 }
 
 #[test]
 fn test_self_evaluating_forms() {
-    assert_eq!(eval_fresh("42").unwrap(), Value::Number(42.0));
-    assert_eq!(eval_fresh("-2.71").unwrap(), Value::Number(-2.71));
+    assert_eq!(eval_fresh("42").unwrap(), Value::Number(42));
+    assert_eq!(eval_fresh("-271").unwrap(), Value::Number(-271));
     assert_eq!(eval_fresh("#t").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("#f").unwrap(), Value::Bool(false));
     assert_eq!(eval_fresh("\"hello world\"").unwrap(), Value::String("hello world".to_string()));

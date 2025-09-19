@@ -2,10 +2,9 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, take_while1},
     character::complete::{char, multispace0, multispace1},
-    combinator::{map, value},
+    combinator::{map, opt, recognize, value},
     multi::separated_list0,
-    number::complete::double,
-    sequence::{delimited, preceded, terminated},
+    sequence::{delimited, pair, preceded, terminated},
     IResult,
 };
 
@@ -16,9 +15,20 @@ fn opt_whitespace(input: &str) -> IResult<&str, ()> {
     value((), multispace0)(input)
 }
 
-/// Parse a number (integer or float)
+/// Parse a number (integer only)
 fn parse_number(input: &str) -> IResult<&str, Value> {
-    map(double, Value::Number)(input)
+    let (input, number_str) = recognize(pair(
+        opt(char('-')),
+        take_while1(|c: char| c.is_ascii_digit())
+    ))(input)?;
+    
+    match number_str.parse::<i64>() {
+        Ok(n) => Ok((input, Value::Number(n))),
+        Err(_) => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Digit,
+        ))),
+    }
 }
 
 /// Parse a boolean (#t or #f)
@@ -133,9 +143,11 @@ mod tests {
 
     #[test]
     fn test_parse_number() {
-        assert_eq!(parse("42").unwrap(), Value::Number(42.0));
-        assert_eq!(parse("3.14").unwrap(), Value::Number(3.14));
-        assert_eq!(parse("-5").unwrap(), Value::Number(-5.0));
+        assert_eq!(parse("42").unwrap(), Value::Number(42));
+        assert_eq!(parse("-5").unwrap(), Value::Number(-5));
+        
+        // Floating point should fail to parse
+        assert!(parse("3.14").is_err());
     }
 
     #[test]
@@ -167,9 +179,9 @@ mod tests {
         assert_eq!(
             parse("(1 2 3)").unwrap(),
             Value::List(vec![
-                Value::Number(1.0),
-                Value::Number(2.0),
-                Value::Number(3.0)
+                Value::Number(1),
+                Value::Number(2),
+                Value::Number(3)
             ])
         );
         
@@ -177,8 +189,8 @@ mod tests {
             parse("(+ 1 2)").unwrap(),
             Value::List(vec![
                 Value::Symbol("+".to_string()),
-                Value::Number(1.0),
-                Value::Number(2.0)
+                Value::Number(1),
+                Value::Number(2)
             ])
         );
     }
@@ -188,8 +200,8 @@ mod tests {
         assert_eq!(
             parse("((1 2) (3 4))").unwrap(),
             Value::List(vec![
-                Value::List(vec![Value::Number(1.0), Value::Number(2.0)]),
-                Value::List(vec![Value::Number(3.0), Value::Number(4.0)])
+                Value::List(vec![Value::Number(1), Value::Number(2)]),
+                Value::List(vec![Value::Number(3), Value::Number(4)])
             ])
         );
     }

@@ -180,7 +180,7 @@ pub fn create_global_env() -> Environment {
 // Built-in function implementations
 
 fn builtin_add(args: &[Value]) -> Result<Value, SchemeError> {
-    let mut sum = 0.0;
+    let mut sum = 0i64;
     for arg in args {
         match arg {
             Value::Number(n) => sum += n,
@@ -215,7 +215,7 @@ fn builtin_sub(args: &[Value]) -> Result<Value, SchemeError> {
 }
 
 fn builtin_mul(args: &[Value]) -> Result<Value, SchemeError> {
-    let mut product = 1.0;
+    let mut product = 1i64;
     for arg in args {
         match arg {
             Value::Number(n) => product *= n,
@@ -233,19 +233,21 @@ fn builtin_div(args: &[Value]) -> Result<Value, SchemeError> {
     match &args[0] {
         Value::Number(first) => {
             if args.len() == 1 {
-                if *first == 0.0 {
+                if *first == 0 {
                     return Err(SchemeError::EvalError("Division by zero".to_string()));
                 }
-                Ok(Value::Number(1.0 / first))
+                // For integer division, 1/n where n != 1 would be 0, which isn't very useful
+                // Let's return an error for unary division with integers
+                return Err(SchemeError::EvalError("Integer division: (/ n) not supported".to_string()));
             } else {
                 let mut result = *first;
                 for arg in &args[1..] {
                     match arg {
                         Value::Number(n) => {
-                            if *n == 0.0 {
+                            if *n == 0 {
                                 return Err(SchemeError::EvalError("Division by zero".to_string()));
                             }
-                            result /= n;
+                            result /= n; // Integer division
                         }
                         _ => return Err(SchemeError::TypeError("/ requires numbers".to_string())),
                     }
@@ -262,11 +264,7 @@ fn builtin_eq(args: &[Value]) -> Result<Value, SchemeError> {
         return Err(SchemeError::ArityError { expected: 2, got: args.len() });
     }
     
-    let result = match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => (a - b).abs() < f64::EPSILON,
-        _ => args[0] == args[1],
-    };
-    
+    let result = args[0] == args[1];
     Ok(Value::Bool(result))
 }
 
@@ -373,24 +371,24 @@ mod tests {
 
     #[test]
     fn test_self_evaluating() {
-        assert_eq!(eval_string("42").unwrap(), Value::Number(42.0));
+        assert_eq!(eval_string("42").unwrap(), Value::Number(42));
         assert_eq!(eval_string("#t").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("\"hello\"").unwrap(), Value::String("hello".to_string()));
     }
 
     #[test]
     fn test_arithmetic() {
-        assert_eq!(eval_string("(+ 1 2 3)").unwrap(), Value::Number(6.0));
-        assert_eq!(eval_string("(- 10 3 2)").unwrap(), Value::Number(5.0));
-        assert_eq!(eval_string("(* 2 3 4)").unwrap(), Value::Number(24.0));
-        assert_eq!(eval_string("(/ 8 2)").unwrap(), Value::Number(4.0));
+        assert_eq!(eval_string("(+ 1 2 3)").unwrap(), Value::Number(6));
+        assert_eq!(eval_string("(- 10 3 2)").unwrap(), Value::Number(5));
+        assert_eq!(eval_string("(* 2 3 4)").unwrap(), Value::Number(24));
+        assert_eq!(eval_string("(/ 8 2)").unwrap(), Value::Number(4));
     }
 
     #[test]
     fn test_quote() {
         assert_eq!(eval_string("(quote foo)").unwrap(), Value::Symbol("foo".to_string()));
         assert_eq!(eval_string("(quote (1 2 3))").unwrap(), 
-                   Value::List(vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]));
+                   Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]));
     }
 
     #[test]
@@ -400,23 +398,23 @@ mod tests {
         eval(&define_expr, &mut env).unwrap();
         
         let lookup_expr = parse("x").unwrap();
-        assert_eq!(eval(&lookup_expr, &mut env).unwrap(), Value::Number(42.0));
+        assert_eq!(eval(&lookup_expr, &mut env).unwrap(), Value::Number(42));
     }
 
     #[test]
     fn test_if() {
-        assert_eq!(eval_string("(if #t 1 2)").unwrap(), Value::Number(1.0));
-        assert_eq!(eval_string("(if #f 1 2)").unwrap(), Value::Number(2.0));
-        assert_eq!(eval_string("(if #t 1)").unwrap(), Value::Number(1.0));
+        assert_eq!(eval_string("(if #t 1 2)").unwrap(), Value::Number(1));
+        assert_eq!(eval_string("(if #f 1 2)").unwrap(), Value::Number(2));
+        assert_eq!(eval_string("(if #t 1)").unwrap(), Value::Number(1));
         assert_eq!(eval_string("(if #f 1)").unwrap(), Value::Nil);
     }
 
     #[test]
     fn test_list_operations() {
-        assert_eq!(eval_string("(car (list 1 2 3))").unwrap(), Value::Number(1.0));
+        assert_eq!(eval_string("(car (list 1 2 3))").unwrap(), Value::Number(1));
         assert_eq!(eval_string("(cdr (list 1 2 3))").unwrap(), 
-                   Value::List(vec![Value::Number(2.0), Value::Number(3.0)]));
+                   Value::List(vec![Value::Number(2), Value::Number(3)]));
         assert_eq!(eval_string("(cons 1 (list 2 3))").unwrap(),
-                   Value::List(vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]));
+                   Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]));
     }
 }

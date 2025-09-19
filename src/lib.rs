@@ -4,8 +4,8 @@ use std::fmt;
 /// Core value types in our Scheme interpreter
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    /// Numbers (we'll use f64 for simplicity)
-    Number(f64),
+    /// Numbers (integers only)
+    Number(i64),
     /// Symbols (identifiers)
     Symbol(String),
     /// String literals
