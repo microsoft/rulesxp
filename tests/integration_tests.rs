@@ -17,11 +17,9 @@ fn test_basic_arithmetic() {
     assert_eq!(eval_fresh("(+ 1 2 3)").unwrap(), Value::Number(6));
     assert_eq!(eval_fresh("(- 10 3 2)").unwrap(), Value::Number(5));
     assert_eq!(eval_fresh("(* 2 3 4)").unwrap(), Value::Number(24));
-    assert_eq!(eval_fresh("(/ 12 3)").unwrap(), Value::Number(4));
     
     // Test unary operators
     assert_eq!(eval_fresh("(- 5)").unwrap(), Value::Number(-5));
-    // Note: unary division (/ 4) no longer supported with integers
 }
 
 #[test]
@@ -38,6 +36,12 @@ fn test_comparisons() {
     assert_eq!(eval_fresh("(< 5 3)").unwrap(), Value::Bool(false));
     assert_eq!(eval_fresh("(> 5 3)").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("(> 3 5)").unwrap(), Value::Bool(false));
+    assert_eq!(eval_fresh("(<= 3 5)").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(<= 5 5)").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(<= 5 3)").unwrap(), Value::Bool(false));
+    assert_eq!(eval_fresh("(>= 5 3)").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(>= 5 5)").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(>= 3 5)").unwrap(), Value::Bool(false));
 }
 
 #[test]
@@ -187,12 +191,6 @@ fn test_complex_expressions() {
 
 #[test]
 fn test_error_cases() {
-    // Division by zero
-    match eval_fresh("(/ 5 0)") {
-        Err(SchemeError::EvalError(_)) => (),
-        _ => panic!("Expected division by zero error"),
-    }
-    
     // Unbound variable
     match eval_fresh("undefined-var") {
         Err(SchemeError::UnboundVariable(_)) => (),
@@ -228,12 +226,6 @@ fn test_error_cases() {
             assert_eq!(var, "set!");
         },
         _ => panic!("Expected unbound variable error for set!"),
-    }
-    
-    // Test integer division limitations
-    match eval_fresh("(/ 4)") {
-        Err(SchemeError::EvalError(_)) => (),
-        _ => panic!("Expected error for unary integer division"),
     }
 }
 
@@ -298,11 +290,10 @@ fn test_logic_operators() {
     
     // Test short-circuit evaluation with functions that could fail
     let mut env = evaluator::create_global_env();
-    eval_string("(define x 0)", &mut env).unwrap();
     
-    // This should not attempt division by zero due to short-circuit
-    assert_eq!(eval_string("(and #f (/ 1 x))", &mut env).unwrap(), Value::Bool(false));
-    assert_eq!(eval_string("(or #t (/ 1 x))", &mut env).unwrap(), Value::Bool(true));
+    // This should not attempt to evaluate undefined-var due to short-circuit
+    assert_eq!(eval_string("(and #f undefined-var)", &mut env).unwrap(), Value::Bool(false));
+    assert_eq!(eval_string("(or #t undefined-var)", &mut env).unwrap(), Value::Bool(true));
     
     // Test error cases
     match eval_fresh("(not)") {

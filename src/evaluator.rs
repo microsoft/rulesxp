@@ -202,12 +202,13 @@ pub fn create_global_env() -> Environment {
     env.define("+".to_string(), Value::BuiltinFunction(builtin_add));
     env.define("-".to_string(), Value::BuiltinFunction(builtin_sub));
     env.define("*".to_string(), Value::BuiltinFunction(builtin_mul));
-    env.define("/".to_string(), Value::BuiltinFunction(builtin_div));
     
     // Comparison functions
     env.define("=".to_string(), Value::BuiltinFunction(builtin_eq));
     env.define("<".to_string(), Value::BuiltinFunction(builtin_lt));
     env.define(">".to_string(), Value::BuiltinFunction(builtin_gt));
+    env.define("<=".to_string(), Value::BuiltinFunction(builtin_le));
+    env.define(">=".to_string(), Value::BuiltinFunction(builtin_ge));
     
     // List functions
     env.define("car".to_string(), Value::BuiltinFunction(builtin_car));
@@ -270,40 +271,6 @@ fn builtin_mul(args: &[Value]) -> Result<Value, SchemeError> {
     Ok(Value::Number(product))
 }
 
-fn builtin_div(args: &[Value]) -> Result<Value, SchemeError> {
-    if args.is_empty() {
-        return Err(SchemeError::ArityError { expected: 1, got: 0 });
-    }
-    
-    match &args[0] {
-        Value::Number(first) => {
-            if args.len() == 1 {
-                if *first == 0 {
-                    return Err(SchemeError::EvalError("Division by zero".to_string()));
-                }
-                // For integer division, 1/n where n != 1 would be 0, which isn't very useful
-                // Let's return an error for unary division with integers
-                return Err(SchemeError::EvalError("Integer division: (/ n) not supported".to_string()));
-            } else {
-                let mut result = *first;
-                for arg in &args[1..] {
-                    match arg {
-                        Value::Number(n) => {
-                            if *n == 0 {
-                                return Err(SchemeError::EvalError("Division by zero".to_string()));
-                            }
-                            result /= n; // Integer division
-                        }
-                        _ => return Err(SchemeError::TypeError("/ requires numbers".to_string())),
-                    }
-                }
-                Ok(Value::Number(result))
-            }
-        }
-        _ => Err(SchemeError::TypeError("/ requires numbers".to_string())),
-    }
-}
-
 fn builtin_eq(args: &[Value]) -> Result<Value, SchemeError> {
     if args.len() != 2 {
         return Err(SchemeError::ArityError { expected: 2, got: args.len() });
@@ -332,6 +299,28 @@ fn builtin_gt(args: &[Value]) -> Result<Value, SchemeError> {
     match (&args[0], &args[1]) {
         (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a > b)),
         _ => Err(SchemeError::TypeError("> requires numbers".to_string())),
+    }
+}
+
+fn builtin_le(args: &[Value]) -> Result<Value, SchemeError> {
+    if args.len() != 2 {
+        return Err(SchemeError::ArityError { expected: 2, got: args.len() });
+    }
+    
+    match (&args[0], &args[1]) {
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a <= b)),
+        _ => Err(SchemeError::TypeError("<= requires numbers".to_string())),
+    }
+}
+
+fn builtin_ge(args: &[Value]) -> Result<Value, SchemeError> {
+    if args.len() != 2 {
+        return Err(SchemeError::ArityError { expected: 2, got: args.len() });
+    }
+    
+    match (&args[0], &args[1]) {
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a >= b)),
+        _ => Err(SchemeError::TypeError(">= requires numbers".to_string())),
     }
 }
 
@@ -434,7 +423,22 @@ mod tests {
         assert_eq!(eval_string("(+ 1 2 3)").unwrap(), Value::Number(6));
         assert_eq!(eval_string("(- 10 3 2)").unwrap(), Value::Number(5));
         assert_eq!(eval_string("(* 2 3 4)").unwrap(), Value::Number(24));
-        assert_eq!(eval_string("(/ 8 2)").unwrap(), Value::Number(4));
+    }
+
+    #[test]
+    fn test_comparisons() {
+        assert_eq!(eval_string("(= 5 5)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(= 5 6)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(< 3 5)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(< 5 3)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(> 5 3)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(> 3 5)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(<= 3 5)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(<= 5 5)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(<= 5 3)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(>= 5 3)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(>= 5 5)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(>= 3 5)").unwrap(), Value::Bool(false));
     }
 
     #[test]

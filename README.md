@@ -46,12 +46,13 @@ A minimal Scheme-compatible interpreter implemented in Rust, built for simplicit
 - **`+`**: Addition (`(+ 1 2 3)` => `6`)
 - **`-`**: Subtraction (`(- 10 3 2)` => `5`, `(- 5)` => `-5`)
 - **`*`**: Multiplication (`(* 2 3 4)` => `24`)
-- **`/`**: Division (`(/ 8 2)` => `4`, `(/ 4)` => `0.25`)
 
 #### Comparison
 - **`=`**: Equality (`(= 5 5)` => `#t`)
 - **`<`**: Less than (`(< 3 5)` => `#t`)
 - **`>`**: Greater than (`(> 5 3)` => `#t`)
+- **`<=`**: Less than or equal (`(<= 5 5)` => `#t`)
+- **`>=`**: Greater than or equal (`(>= 5 3)` => `#t`)
 
 #### List Operations
 - **`car`**: First element of list (`(car (list 1 2 3))` => `1`)
@@ -105,16 +106,16 @@ println!("{}", result); // 6
 scheme> (+ 10 (* 3 4) (- 8 3))
 27
 
-scheme> (/ (+ 2 3) (- 7 2))
-1
+scheme> (* (+ 2 3) (- 7 2))
+25
 ```
 
 ### Variable Definition and Usage
 ```scheme
-scheme> (define pi 3.14159)
-pi
-scheme> (* pi 2)
-6.28318
+scheme> (define radius 5)
+radius
+scheme> (* radius radius)
+25
 ```
 
 ### Function Definition
