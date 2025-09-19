@@ -220,6 +220,12 @@ pub fn create_global_env() -> Environment {
     // Logic functions
     env.define("not".to_string(), Value::BuiltinFunction(builtin_not));
     
+    // General equality functions
+    env.define("equal?".to_string(), Value::BuiltinFunction(builtin_equal));
+    
+    // Error function
+    env.define("error".to_string(), Value::BuiltinFunction(builtin_error));
+    
     env
 }
 
@@ -276,8 +282,11 @@ fn builtin_eq(args: &[Value]) -> Result<Value, SchemeError> {
         return Err(SchemeError::ArityError { expected: 2, got: args.len() });
     }
     
-    let result = args[0] == args[1];
-    Ok(Value::Bool(result))
+    // Scheme's = is numeric equality only
+    match (&args[0], &args[1]) {
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a == b)),
+        _ => Err(SchemeError::TypeError("= requires numbers".to_string())),
+    }
 }
 
 fn builtin_lt(args: &[Value]) -> Result<Value, SchemeError> {
@@ -400,6 +409,43 @@ fn builtin_not(args: &[Value]) -> Result<Value, SchemeError> {
     Ok(Value::Bool(args[0].is_falsy()))
 }
 
+fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
+    if args.len() != 2 {
+        return Err(SchemeError::ArityError { expected: 2, got: args.len() });
+    }
+    
+    // Scheme's equal? is structural equality for all types
+    let result = args[0] == args[1];
+    Ok(Value::Bool(result))
+}
+
+fn builtin_error(args: &[Value]) -> Result<Value, SchemeError> {
+    if args.is_empty() {
+        return Err(SchemeError::EvalError("Error".to_string()));
+    }
+    
+    // Convert first argument to error message
+    let message = match &args[0] {
+        Value::String(s) => s.clone(), // Remove quotes for error messages
+        _ => format!("{}", args[0]), // Use Display trait for everything else
+    };
+    
+    // If there are additional arguments, include them in the message
+    if args.len() > 1 {
+        let mut full_message = message;
+        for arg in &args[1..] {
+            full_message.push(' ');
+            match arg {
+                Value::String(s) => full_message.push_str(s), // Remove quotes for error messages
+                _ => full_message.push_str(&format!("{}", arg)), // Use Display trait
+            }
+        }
+        Err(SchemeError::EvalError(full_message))
+    } else {
+        Err(SchemeError::EvalError(message))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,8 +473,23 @@ mod tests {
 
     #[test]
     fn test_comparisons() {
+        // Test numeric = (spec-compliant)
         assert_eq!(eval_string("(= 5 5)").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(= 5 6)").unwrap(), Value::Bool(false));
+        
+        // Test that = rejects non-numbers
+        assert!(eval_string("(= \"hello\" \"hello\")").is_err());
+        assert!(eval_string("(= #t #t)").is_err());
+        
+        // Test general equality with equal?
+        assert_eq!(eval_string("(equal? 5 5)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(equal? 5 6)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(equal? \"hello\" \"hello\")").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(equal? \"hello\" \"world\")").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(equal? #t #t)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(equal? #t #f)").unwrap(), Value::Bool(false));
+        
+        // Test numeric comparisons
         assert_eq!(eval_string("(< 3 5)").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(< 5 3)").unwrap(), Value::Bool(false));
         assert_eq!(eval_string("(> 5 3)").unwrap(), Value::Bool(true));
@@ -509,5 +570,43 @@ mod tests {
         assert_eq!(eval_string("(and (or #f #t) (not #f))").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(or (and #f #t) (not #f))").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(not (and #t #f))").unwrap(), Value::Bool(true));
+    }
+
+    #[test]
+    fn test_error_function() {
+        // Test error with string message
+        let result = eval_string("(error \"Something went wrong\")");
+        assert!(result.is_err());
+        if let Err(SchemeError::EvalError(msg)) = result {
+            assert_eq!(msg, "Something went wrong");
+        }
+        
+        // Test error with symbol message
+        let result = eval_string("(error oops)");
+        assert!(result.is_err());
+        if let Err(SchemeError::EvalError(msg)) = result {
+            assert_eq!(msg, "oops");
+        }
+        
+        // Test error with number message
+        let result = eval_string("(error 42)");
+        assert!(result.is_err());
+        if let Err(SchemeError::EvalError(msg)) = result {
+            assert_eq!(msg, "42");
+        }
+        
+        // Test error with multiple arguments
+        let result = eval_string("(error \"Error:\" 42 \"occurred\")");
+        assert!(result.is_err());
+        if let Err(SchemeError::EvalError(msg)) = result {
+            assert_eq!(msg, "Error: 42 occurred");
+        }
+        
+        // Test error with no arguments
+        let result = eval_string("(error)");
+        assert!(result.is_err());
+        if let Err(SchemeError::EvalError(msg)) = result {
+            assert_eq!(msg, "Error");
+        }
     }
 }

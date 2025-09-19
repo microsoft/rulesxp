@@ -7,3 +7,10 @@ edition = "2024"
 nom = "7.1"
 thiserror = "1.0"
 rustyline = "13.0"
+
+[profile.release]
+# Optimize for size
+opt-level = "z"     # Optimize for size instead of speed
+lto = true          # Enable Link Time Optimization
+codegen-units = 1   # Reduce parallel code generation
+strip = true        # Remove debug symbols
