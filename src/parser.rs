@@ -15,8 +15,13 @@ fn opt_whitespace(input: &str) -> IResult<&str, ()> {
     value((), multispace0)(input)
 }
 
-/// Parse a number (integer only)
+/// Parse a number (integer only, supports decimal and hexadecimal)
 fn parse_number(input: &str) -> IResult<&str, Value> {
+    alt((parse_hexadecimal, parse_decimal))(input)
+}
+
+/// Parse a decimal number
+fn parse_decimal(input: &str) -> IResult<&str, Value> {
     let (input, number_str) = recognize(pair(
         opt(char('-')),
         take_while1(|c: char| c.is_ascii_digit())
@@ -27,6 +32,21 @@ fn parse_number(input: &str) -> IResult<&str, Value> {
         Err(_) => Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Digit,
+        ))),
+    }
+}
+
+/// Parse a hexadecimal number (#x or #X prefix)
+fn parse_hexadecimal(input: &str) -> IResult<&str, Value> {
+    let (input, _) = char('#')(input)?;
+    let (input, _) = alt((char('x'), char('X')))(input)?;
+    let (input, hex_digits) = take_while1(|c: char| c.is_ascii_hexdigit())(input)?;
+    
+    match i64::from_str_radix(hex_digits, 16) {
+        Ok(n) => Ok((input, Value::Number(n))),
+        Err(_) => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::HexDigit,
         ))),
     }
 }
@@ -143,11 +163,24 @@ mod tests {
 
     #[test]
     fn test_parse_number() {
+        // Decimal numbers
         assert_eq!(parse("42").unwrap(), Value::Number(42));
         assert_eq!(parse("-5").unwrap(), Value::Number(-5));
         
+        // Hexadecimal numbers
+        assert_eq!(parse("#x1A").unwrap(), Value::Number(26));
+        assert_eq!(parse("#X1a").unwrap(), Value::Number(26));
+        assert_eq!(parse("#xff").unwrap(), Value::Number(255));
+        assert_eq!(parse("#xFF").unwrap(), Value::Number(255));
+        assert_eq!(parse("#x0").unwrap(), Value::Number(0));
+        assert_eq!(parse("#x12345").unwrap(), Value::Number(74565));
+        
         // Floating point should fail to parse
         assert!(parse("3.14").is_err());
+        
+        // Invalid hexadecimal should fail
+        assert!(parse("#xG").is_err());
+        assert!(parse("#x").is_err());
     }
 
     #[test]
