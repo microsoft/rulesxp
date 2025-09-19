@@ -27,6 +27,8 @@ pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
                     "define" => eval_define(&elements[1..], env),
                     "if" => eval_if(&elements[1..], env),
                     "lambda" => eval_lambda(&elements[1..], env),
+                    "and" => eval_and(&elements[1..], env),
+                    "or" => eval_or(&elements[1..], env),
                     _ => eval_application(elements, env),
                 },
                 _ => eval_application(elements, env),
@@ -66,13 +68,8 @@ fn eval_if(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> 
     }
     
     let condition = eval(&args[0], env)?;
-    let is_truthy = match condition {
-        Value::Bool(false) | Value::Nil => false,
-        Value::List(ref list) if list.is_empty() => false,
-        _ => true,
-    };
     
-    if is_truthy {
+    if condition.is_truthy() {
         eval(&args[1], env)
     } else if args.len() == 3 {
         eval(&args[2], env)
@@ -108,6 +105,51 @@ fn eval_lambda(args: &[Value], env: &Environment) -> Result<Value, SchemeError> 
         body: Box::new(args[1].clone()),
         env: env.clone(),
     })
+}
+
+/// Evaluate and special form (short-circuit evaluation)
+fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+    // (and) returns #t
+    if args.is_empty() {
+        return Ok(Value::Bool(true));
+    }
+    
+    // Evaluate each argument until one is falsy or we reach the end
+    for (i, arg) in args.iter().enumerate() {
+        let result = eval(arg, env)?;
+        
+        if result.is_falsy() {
+            return Ok(Value::Bool(false));
+        }
+        
+        // Return the last value if this is the final argument
+        if i == args.len() - 1 {
+            return Ok(result);
+        }
+    }
+    
+    // This should never be reached due to the logic above
+    Ok(Value::Bool(true))
+}
+
+/// Evaluate or special form (short-circuit evaluation)
+fn eval_or(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+    // (or) returns #f
+    if args.is_empty() {
+        return Ok(Value::Bool(false));
+    }
+    
+    // Evaluate each argument until one is truthy or we reach the end
+    for arg in args {
+        let result = eval(arg, env)?;
+        
+        if result.is_truthy() {
+            return Ok(result);
+        }
+    }
+    
+    // All arguments were falsy
+    Ok(Value::Bool(false))
 }
 
 /// Evaluate function application
@@ -173,6 +215,9 @@ pub fn create_global_env() -> Environment {
     env.define("cons".to_string(), Value::BuiltinFunction(builtin_cons));
     env.define("list".to_string(), Value::BuiltinFunction(builtin_list));
     env.define("null?".to_string(), Value::BuiltinFunction(builtin_null));
+    
+    // Logic functions
+    env.define("not".to_string(), Value::BuiltinFunction(builtin_not));
     
     env
 }
@@ -358,6 +403,14 @@ fn builtin_null(args: &[Value]) -> Result<Value, SchemeError> {
     Ok(Value::Bool(is_null))
 }
 
+fn builtin_not(args: &[Value]) -> Result<Value, SchemeError> {
+    if args.len() != 1 {
+        return Err(SchemeError::ArityError { expected: 1, got: args.len() });
+    }
+    
+    Ok(Value::Bool(args[0].is_falsy()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,5 +469,41 @@ mod tests {
                    Value::List(vec![Value::Number(2), Value::Number(3)]));
         assert_eq!(eval_string("(cons 1 (list 2 3))").unwrap(),
                    Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]));
+    }
+
+    #[test]
+    fn test_logic_operators() {
+        // Test 'and' operator
+        assert_eq!(eval_string("(and)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(and #t)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(and #f)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(and #t #t)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(and #t #f)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(and #f #t)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(and 1 2 3)").unwrap(), Value::Number(3)); // returns last value
+        assert_eq!(eval_string("(and 1 #f 3)").unwrap(), Value::Bool(false)); // short-circuit
+        
+        // Test 'or' operator
+        assert_eq!(eval_string("(or)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(or #t)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(or #f)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(or #t #f)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(or #f #t)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(or #f #f)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(or #f 2 3)").unwrap(), Value::Number(2)); // returns first truthy value
+        assert_eq!(eval_string("(or 1 2 3)").unwrap(), Value::Number(1)); // short-circuit
+        
+        // Test 'not' operator
+        assert_eq!(eval_string("(not #t)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(not #f)").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(not ())").unwrap(), Value::Bool(true)); // nil is falsy
+        assert_eq!(eval_string("(not 0)").unwrap(), Value::Bool(false)); // 0 is truthy
+        assert_eq!(eval_string("(not 42)").unwrap(), Value::Bool(false));
+        assert_eq!(eval_string("(not \"hello\")").unwrap(), Value::Bool(false));
+        
+        // Test complex combinations
+        assert_eq!(eval_string("(and (or #f #t) (not #f))").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(or (and #f #t) (not #f))").unwrap(), Value::Bool(true));
+        assert_eq!(eval_string("(not (and #t #f))").unwrap(), Value::Bool(true));
     }
 }

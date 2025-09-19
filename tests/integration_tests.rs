@@ -256,3 +256,62 @@ fn test_self_evaluating_forms() {
     assert_eq!(eval_fresh("\"hello world\"").unwrap(), Value::String("hello world".to_string()));
     assert_eq!(eval_fresh("()").unwrap(), Value::Nil);
 }
+
+#[test]
+fn test_logic_operators() {
+    // Test 'and' with various inputs
+    assert_eq!(eval_fresh("(and)").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(and #t)").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(and #f)").unwrap(), Value::Bool(false));
+    assert_eq!(eval_fresh("(and #t #t #t)").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(and #t #f #t)").unwrap(), Value::Bool(false));
+    assert_eq!(eval_fresh("(and 1 2 3)").unwrap(), Value::Number(3)); // returns last value
+    assert_eq!(eval_fresh("(and 1 #f 3)").unwrap(), Value::Bool(false)); // short-circuit
+    assert_eq!(eval_fresh("(and \"hello\" 42)").unwrap(), Value::Number(42));
+    
+    // Test 'or' with various inputs
+    assert_eq!(eval_fresh("(or)").unwrap(), Value::Bool(false));
+    assert_eq!(eval_fresh("(or #t)").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(or #f)").unwrap(), Value::Bool(false));
+    assert_eq!(eval_fresh("(or #f #f #t)").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(or #f #f #f)").unwrap(), Value::Bool(false));
+    assert_eq!(eval_fresh("(or #f 2 3)").unwrap(), Value::Number(2)); // returns first truthy
+    assert_eq!(eval_fresh("(or 1 2 3)").unwrap(), Value::Number(1)); // short-circuit
+    assert_eq!(eval_fresh("(or () #f 42)").unwrap(), Value::Number(42));
+    
+    // Test 'not' with various inputs
+    assert_eq!(eval_fresh("(not #t)").unwrap(), Value::Bool(false));
+    assert_eq!(eval_fresh("(not #f)").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(not ())").unwrap(), Value::Bool(true)); // nil is falsy
+    assert_eq!(eval_fresh("(not 0)").unwrap(), Value::Bool(false)); // 0 is truthy
+    assert_eq!(eval_fresh("(not 42)").unwrap(), Value::Bool(false));
+    assert_eq!(eval_fresh("(not \"hello\")").unwrap(), Value::Bool(false));
+    assert_eq!(eval_fresh("(not (list))").unwrap(), Value::Bool(true)); // empty list is falsy
+    assert_eq!(eval_fresh("(not (list 1))").unwrap(), Value::Bool(false)); // non-empty list is truthy
+    
+    // Test combinations and complex expressions
+    assert_eq!(eval_fresh("(and (or #f #t) (not #f))").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(or (and #f #t) (not #f))").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(not (and #t #f))").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(and (> 5 3) (< 2 4))").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(or (= 1 2) (= 2 2))").unwrap(), Value::Bool(true));
+    
+    // Test short-circuit evaluation with functions that could fail
+    let mut env = evaluator::create_global_env();
+    eval_string("(define x 0)", &mut env).unwrap();
+    
+    // This should not attempt division by zero due to short-circuit
+    assert_eq!(eval_string("(and #f (/ 1 x))", &mut env).unwrap(), Value::Bool(false));
+    assert_eq!(eval_string("(or #t (/ 1 x))", &mut env).unwrap(), Value::Bool(true));
+    
+    // Test error cases
+    match eval_fresh("(not)") {
+        Err(SchemeError::ArityError { expected: 1, got: 0 }) => (),
+        _ => panic!("Expected arity error for not with no arguments"),
+    }
+    
+    match eval_fresh("(not 1 2)") {
+        Err(SchemeError::ArityError { expected: 1, got: 2 }) => (),
+        _ => panic!("Expected arity error for not with too many arguments"),
+    }
+}

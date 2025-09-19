@@ -69,6 +69,24 @@ impl fmt::Display for Value {
     }
 }
 
+impl Value {
+    /// Check if a value is truthy according to Scheme semantics
+    /// In Scheme, only #f and () (empty list) are falsy, everything else is truthy
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            Value::Bool(false) | Value::Nil => false,
+            Value::List(list) if list.is_empty() => false,
+            _ => true,
+        }
+    }
+
+    /// Check if a value is falsy according to Scheme semantics
+    /// This is the logical inverse of is_truthy
+    pub fn is_falsy(&self) -> bool {
+        !self.is_truthy()
+    }
+}
+
 impl fmt::Display for SchemeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
