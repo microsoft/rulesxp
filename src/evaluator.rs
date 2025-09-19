@@ -239,7 +239,10 @@ fn builtin_add(args: &[Value]) -> Result<Value, SchemeError> {
     let mut sum = 0i64;
     for arg in args {
         match arg {
-            Value::Number(n) => sum += n,
+            Value::Number(n) => {
+                sum = sum.checked_add(*n)
+                    .ok_or_else(|| SchemeError::EvalError("Integer overflow in addition".to_string()))?;
+            },
             _ => return Err(SchemeError::TypeError("+ requires numbers".to_string())),
         }
     }
@@ -254,12 +257,18 @@ fn builtin_sub(args: &[Value]) -> Result<Value, SchemeError> {
     match &args[0] {
         Value::Number(first) => {
             if args.len() == 1 {
-                Ok(Value::Number(-first))
+                // Unary minus: check for overflow when negating
+                let result = first.checked_neg()
+                    .ok_or_else(|| SchemeError::EvalError("Integer overflow in negation".to_string()))?;
+                Ok(Value::Number(result))
             } else {
                 let mut result = *first;
                 for arg in &args[1..] {
                     match arg {
-                        Value::Number(n) => result -= n,
+                        Value::Number(n) => {
+                            result = result.checked_sub(*n)
+                                .ok_or_else(|| SchemeError::EvalError("Integer overflow in subtraction".to_string()))?;
+                        },
                         _ => return Err(SchemeError::TypeError("- requires numbers".to_string())),
                     }
                 }
@@ -274,7 +283,10 @@ fn builtin_mul(args: &[Value]) -> Result<Value, SchemeError> {
     let mut product = 1i64;
     for arg in args {
         match arg {
-            Value::Number(n) => product *= n,
+            Value::Number(n) => {
+                product = product.checked_mul(*n)
+                    .ok_or_else(|| SchemeError::EvalError("Integer overflow in multiplication".to_string()))?;
+            },
             _ => return Err(SchemeError::TypeError("* requires numbers".to_string())),
         }
     }
@@ -476,6 +488,28 @@ mod tests {
         assert_eq!(eval_string("(+ 1 2 3)").unwrap(), Value::Number(6));
         assert_eq!(eval_string("(- 10 3 2)").unwrap(), Value::Number(5));
         assert_eq!(eval_string("(* 2 3 4)").unwrap(), Value::Number(24));
+    }
+
+    #[test]
+    fn test_arithmetic_overflow() {
+        // Test addition overflow
+        let max_val = i64::MAX;
+        let overflow_add = format!("(+ {} 1)", max_val);
+        assert!(eval_string(&overflow_add).is_err());
+        
+        // Test subtraction overflow (negating MIN value)
+        let min_val = i64::MIN;
+        let overflow_neg = format!("(- {})", min_val);
+        assert!(eval_string(&overflow_neg).is_err());
+        
+        // Test subtraction underflow
+        let underflow_sub = format!("(- {} 1)", min_val);
+        assert!(eval_string(&underflow_sub).is_err());
+        
+        // Test multiplication overflow
+        let large_val = i64::MAX / 2 + 1;
+        let overflow_mul = format!("(* {} 2)", large_val);
+        assert!(eval_string(&overflow_mul).is_err());
     }
 
     #[test]
