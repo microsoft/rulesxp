@@ -5,7 +5,7 @@ A minimal Scheme-compatible interpreter implemented in Rust, built for simplicit
 ## Features
 
 ### Data Types
-- **Numbers**: Floating-point numbers (`42`, `3.14`, `-5`)
+- **Numbers**: Integer numbers only (`42`, `-5`, `#xFF`, `#x1A`)
 - **Booleans**: `#t` (true) and `#f` (false)
 - **Strings**: `"hello world"`
 - **Symbols**: Identifiers like `foo`, `+`, `>=`
@@ -46,6 +46,38 @@ A minimal Scheme-compatible interpreter implemented in Rust, built for simplicit
 - **`+`**: Addition (`(+ 1 2 3)` => `6`)
 - **`-`**: Subtraction (`(- 10 3 2)` => `5`, `(- 5)` => `-5`)
 - **`*`**: Multiplication (`(* 2 3 4)` => `24`)
+
+#### Logic Operations
+- **`and`**: Logical AND - requires boolean arguments only
+  ```scheme
+  (and #t #f)         ; => #f
+  (and #t #t)         ; => #t  
+  (and)               ; => #t
+  (and 1 2)           ; => Error: and requires boolean arguments
+  ```
+- **`or`**: Logical OR - requires boolean arguments only
+  ```scheme
+  (or #f #t)          ; => #t
+  (or #f #f)          ; => #f
+  (or)                ; => #f
+  (or 1 2)            ; => Error: or requires boolean arguments
+  ```
+- **`not`**: Logical NOT - requires boolean argument only
+  ```scheme
+  (not #t)            ; => #f
+  (not #f)            ; => #t
+  (not 42)            ; => Error: not requires a boolean argument
+  ```
+
+#### General Equality
+- **`equal?`**: Structural equality for all types (`(equal? "hello" "hello")` => `#t`)
+
+#### Error Handling
+- **`error`**: Raise an error with custom message
+  ```scheme
+  (error "Something went wrong")           ; Raises error with message
+  (error "Code:" 404 "not found")         ; Multiple arguments
+  ```
 
 #### Comparison
 - **`=`**: Equality (`(= 5 5)` => `#t`)
@@ -173,10 +205,95 @@ The interpreter is built with three main components:
 - `Environment`: Hash map-based environment for variable bindings with parent chain for scoping
 - `SchemeError`: Comprehensive error types for parsing and evaluation errors
 
-## Limitations
+## Differences from Standard Scheme
 
-This is a **minimal** Scheme interpreter focused on simplicity. It does **not** include:
+This implementation is **stricter** than standard Scheme in several ways:
 
+### 1. Integer-Only Arithmetic
+- **Standard Scheme**: Supports integers, rationals, reals, and complex numbers
+- **This Implementation**: Only supports 64-bit signed integers (`i64`)
+- **Impact**: No floating-point arithmetic, division operator removed to avoid precision issues
+  ```scheme
+  ; Standard Scheme
+  (+ 1.5 2.3)         ; => 3.8
+  (/ 7 3)             ; => 7/3 or 2.333...
+  
+  ; This Implementation  
+  (+ 1 2)             ; => 3 (integers only)
+  (/ 7 3)             ; Error: / not implemented
+  ```
+
+### 2. Strict Boolean Logic Operations
+- **Standard Scheme**: `and`, `or`, `not`, `if` use truthy/falsy semantics (only `#f` and `()` are false)
+- **This Implementation**: Requires actual boolean values (`#t` or `#f`) for all boolean operations
+- **Impact**: Must explicitly convert values to booleans, more predictable control flow
+  ```scheme
+  ; Standard Scheme
+  (and 1 2 3)         ; => 3 (returns last truthy value)
+  (or #f 42)          ; => 42 (returns first truthy value)
+  (not 0)             ; => #f (0 is truthy)
+  (if 42 "yes" "no")  ; => "yes" (42 is truthy)
+  
+  ; This Implementation
+  (and #t #t)         ; => #t (booleans only)
+  (and 1 2)           ; Error: and requires boolean arguments
+  (or #f #t)          ; => #t (booleans only) 
+  (not 42)            ; Error: not requires a boolean argument
+  (if #t "yes" "no")  ; => "yes" (booleans only)
+  (if 42 "yes" "no")  ; Error: if condition must be a boolean
+  ```
+
+### 3. Numeric-Only Equality Operator
+- **Standard Scheme**: `=` can compare various numeric types
+- **This Implementation**: `=` only works on integers, `equal?` for general equality
+- **Impact**: Type-safe numeric comparisons, separate general equality
+  ```scheme
+  ; Standard Scheme
+  (= 5 5.0)           ; => #t (numeric equality across types)
+  (= "hello" "hello") ; Often an error, but varies
+  
+  ; This Implementation
+  (= 5 5)             ; => #t (integers only)
+  (= "hello" "hello") ; Error: = requires numbers
+  (equal? "hello" "hello") ; => #t (use equal? for general equality)
+  ```
+
+### 4. Fixed Arity for Logic Operations
+- **Standard Scheme**: `and` and `or` can take any number of arguments (including zero)
+- **This Implementation**: Supports zero or more arguments, but all must be booleans
+- **Impact**: More predictable behavior, explicit boolean requirements
+  ```scheme
+  ; Both Standard Scheme and This Implementation
+  (and)               ; => #t
+  (or)                ; => #f
+  
+  ; Difference in argument types
+  (and #t 5 "hello")  ; Standard: => "hello", This: Error
+  ```
+
+### 5. Hexadecimal Integer Literals
+- **Standard Scheme**: Supports various numeric formats including hex (`#x1A`)
+- **This Implementation**: Supports decimal and hexadecimal integers
+- **Enhancement**: Added hexadecimal support (`#xFF`, `#x1A`) for integer literals
+
+### Benefits of Stricter Design
+- **Type Safety**: Catches type mismatches early at evaluation time
+- **Predictability**: No ambiguity about implicit type conversions
+- **Explicit Intent**: Forces developers to be clear about type expectations
+- **Educational Value**: Makes type system concepts more visible
+- **Reduced Complexity**: Simpler semantics with fewer edge cases
+
+## Limitations and Design Choices
+
+This is a **minimal** Scheme interpreter with intentionally **stricter semantics** than standard Scheme. 
+
+### Intentionally Stricter (Design Choices)
+- **Integer-only arithmetic**: Avoids floating-point precision issues
+- **Boolean-only logic operations**: Prevents implicit type conversions  
+- **Numeric-only `=` operator**: Type-safe equality checking
+- **Explicit type requirements**: Forces clear intent in code
+
+### Not Implemented (Complexity Reduction)
 - Recursive function definitions (requires `letrec` semantics)
 - Macros or syntax transformation
 - Continuations (`call/cc`)
@@ -184,5 +301,6 @@ This is a **minimal** Scheme interpreter focused on simplicity. It does **not** 
 - Garbage collection beyond Rust's automatic memory management
 - Module system
 - Advanced numeric types (rationals, complex numbers)
+- Quote syntax sugar (`'x` for `(quote x)`)
 - Full R7RS compliance
 

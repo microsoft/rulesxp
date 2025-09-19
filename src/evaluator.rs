@@ -69,12 +69,17 @@ fn eval_if(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> 
     
     let condition = eval(&args[0], env)?;
     
-    if condition.is_truthy() {
-        eval(&args[1], env)
-    } else if args.len() == 3 {
-        eval(&args[2], env)
-    } else {
-        Ok(Value::Nil)
+    // Require boolean condition for strict type safety
+    match condition {
+        Value::Bool(true) => eval(&args[1], env),
+        Value::Bool(false) => {
+            if args.len() == 3 {
+                eval(&args[2], env)
+            } else {
+                Ok(Value::Nil)
+            }
+        }
+        _ => Err(SchemeError::TypeError("if condition must be a boolean".to_string())),
     }
 }
 
@@ -107,48 +112,47 @@ fn eval_lambda(args: &[Value], env: &Environment) -> Result<Value, SchemeError> 
     })
 }
 
-/// Evaluate and special form (short-circuit evaluation)
+/// Evaluate and special form (strict boolean evaluation)
 fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
     // (and) returns #t
     if args.is_empty() {
         return Ok(Value::Bool(true));
     }
     
-    // Evaluate each argument until one is falsy or we reach the end
-    for (i, arg) in args.iter().enumerate() {
+    // Evaluate each argument and require it to be a boolean
+    for arg in args.iter() {
         let result = eval(arg, env)?;
         
-        if result.is_falsy() {
-            return Ok(Value::Bool(false));
-        }
-        
-        // Return the last value if this is the final argument
-        if i == args.len() - 1 {
-            return Ok(result);
+        match result {
+            Value::Bool(false) => return Ok(Value::Bool(false)),
+            Value::Bool(true) => continue,
+            _ => return Err(SchemeError::TypeError("and requires boolean arguments".to_string())),
         }
     }
     
-    // This should never be reached due to the logic above
+    // All arguments were true
     Ok(Value::Bool(true))
 }
 
-/// Evaluate or special form (short-circuit evaluation)
+/// Evaluate or special form (strict boolean evaluation)
 fn eval_or(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
     // (or) returns #f
     if args.is_empty() {
         return Ok(Value::Bool(false));
     }
     
-    // Evaluate each argument until one is truthy or we reach the end
+    // Evaluate each argument and require it to be a boolean
     for arg in args {
         let result = eval(arg, env)?;
         
-        if result.is_truthy() {
-            return Ok(result);
+        match result {
+            Value::Bool(true) => return Ok(Value::Bool(true)),
+            Value::Bool(false) => continue,
+            _ => return Err(SchemeError::TypeError("or requires boolean arguments".to_string())),
         }
     }
     
-    // All arguments were falsy
+    // All arguments were false
     Ok(Value::Bool(false))
 }
 
@@ -406,7 +410,10 @@ fn builtin_not(args: &[Value]) -> Result<Value, SchemeError> {
         return Err(SchemeError::ArityError { expected: 1, got: args.len() });
     }
     
-    Ok(Value::Bool(args[0].is_falsy()))
+    match &args[0] {
+        Value::Bool(b) => Ok(Value::Bool(!b)),
+        _ => Err(SchemeError::TypeError("not requires a boolean argument".to_string())),
+    }
 }
 
 fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
@@ -521,10 +528,17 @@ mod tests {
 
     #[test]
     fn test_if() {
+        // Test if with boolean conditions
         assert_eq!(eval_string("(if #t 1 2)").unwrap(), Value::Number(1));
         assert_eq!(eval_string("(if #f 1 2)").unwrap(), Value::Number(2));
         assert_eq!(eval_string("(if #t 1)").unwrap(), Value::Number(1));
         assert_eq!(eval_string("(if #f 1)").unwrap(), Value::Nil);
+        
+        // Test that if rejects non-boolean conditions
+        assert!(eval_string("(if 0 1 2)").is_err()); // should error with non-boolean
+        assert!(eval_string("(if 42 1 2)").is_err()); // should error with non-boolean
+        assert!(eval_string("(if () 1 2)").is_err()); // should error with non-boolean
+        assert!(eval_string("(if \"hello\" 1 2)").is_err()); // should error with non-boolean
     }
 
     #[test]
@@ -538,35 +552,41 @@ mod tests {
 
     #[test]
     fn test_logic_operators() {
-        // Test 'and' operator
+        // Test 'and' operator - now requires boolean arguments
         assert_eq!(eval_string("(and)").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(and #t)").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(and #f)").unwrap(), Value::Bool(false));
         assert_eq!(eval_string("(and #t #t)").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(and #t #f)").unwrap(), Value::Bool(false));
         assert_eq!(eval_string("(and #f #t)").unwrap(), Value::Bool(false));
-        assert_eq!(eval_string("(and 1 2 3)").unwrap(), Value::Number(3)); // returns last value
-        assert_eq!(eval_string("(and 1 #f 3)").unwrap(), Value::Bool(false)); // short-circuit
         
-        // Test 'or' operator
+        // Test that 'and' rejects non-boolean arguments
+        assert!(eval_string("(and 1 2 3)").is_err()); // should error with non-booleans
+        assert!(eval_string("(and 1 #f 3)").is_err()); // should error with non-booleans
+        
+        // Test 'or' operator - now requires boolean arguments
         assert_eq!(eval_string("(or)").unwrap(), Value::Bool(false));
         assert_eq!(eval_string("(or #t)").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(or #f)").unwrap(), Value::Bool(false));
         assert_eq!(eval_string("(or #t #f)").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(or #f #t)").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(or #f #f)").unwrap(), Value::Bool(false));
-        assert_eq!(eval_string("(or #f 2 3)").unwrap(), Value::Number(2)); // returns first truthy value
-        assert_eq!(eval_string("(or 1 2 3)").unwrap(), Value::Number(1)); // short-circuit
         
-        // Test 'not' operator
+        // Test that 'or' rejects non-boolean arguments
+        assert!(eval_string("(or #f 2 3)").is_err()); // should error with non-booleans
+        assert!(eval_string("(or 1 2 3)").is_err()); // should error with non-booleans
+        
+        // Test 'not' operator - now requires boolean argument
         assert_eq!(eval_string("(not #t)").unwrap(), Value::Bool(false));
         assert_eq!(eval_string("(not #f)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(not ())").unwrap(), Value::Bool(true)); // nil is falsy
-        assert_eq!(eval_string("(not 0)").unwrap(), Value::Bool(false)); // 0 is truthy
-        assert_eq!(eval_string("(not 42)").unwrap(), Value::Bool(false));
-        assert_eq!(eval_string("(not \"hello\")").unwrap(), Value::Bool(false));
         
-        // Test complex combinations
+        // Test that 'not' rejects non-boolean arguments
+        assert!(eval_string("(not ())").is_err()); // should error with non-boolean
+        assert!(eval_string("(not 0)").is_err()); // should error with non-boolean
+        assert!(eval_string("(not 42)").is_err()); // should error with non-boolean
+        assert!(eval_string("(not \"hello\")").is_err()); // should error with non-boolean
+        
+        // Test complex combinations (all with booleans)
         assert_eq!(eval_string("(and (or #f #t) (not #f))").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(or (and #f #t) (not #f))").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(not (and #t #f))").unwrap(), Value::Bool(true));

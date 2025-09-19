@@ -87,16 +87,23 @@ fn test_define_and_variables() {
 
 #[test]
 fn test_if_expressions() {
+    // Test if with boolean conditions
     assert_eq!(eval_fresh("(if #t 1 2)").unwrap(), Value::Number(1));
     assert_eq!(eval_fresh("(if #f 1 2)").unwrap(), Value::Number(2));
     assert_eq!(eval_fresh("(if #t 1)").unwrap(), Value::Number(1));
     assert_eq!(eval_fresh("(if #f 1)").unwrap(), Value::Nil);
     
-    // Test with expressions
+    // Test with boolean expressions (these return booleans)
     assert_eq!(eval_fresh("(if (> 5 3) \"yes\" \"no\")").unwrap(), 
                Value::String("yes".to_string()));
     assert_eq!(eval_fresh("(if (< 5 3) \"yes\" \"no\")").unwrap(),
                Value::String("no".to_string()));
+               
+    // Test that if rejects non-boolean conditions
+    assert!(eval_fresh("(if 0 1 2)").is_err()); // should error with non-boolean
+    assert!(eval_fresh("(if 42 1 2)").is_err()); // should error with non-boolean
+    assert!(eval_fresh("(if () 1 2)").is_err()); // should error with non-boolean
+    assert!(eval_fresh("(if \"hello\" 1 2)").is_err()); // should error with non-boolean
 }
 
 #[test]
@@ -231,12 +238,27 @@ fn test_error_cases() {
 
 #[test]
 fn test_truthiness() {
-    // In Scheme, only #f and () are falsy, everything else is truthy
+    // Our interpreter requires strict boolean conditions for all boolean operators
+    // This is stricter than standard Scheme but more predictable
+    
+    // if requires boolean conditions
     assert_eq!(eval_fresh("(if #f 1 2)").unwrap(), Value::Number(2));
-    assert_eq!(eval_fresh("(if () 1 2)").unwrap(), Value::Number(2));
-    assert_eq!(eval_fresh("(if 0 1 2)").unwrap(), Value::Number(1));
-    assert_eq!(eval_fresh("(if \"\" 1 2)").unwrap(), Value::Number(1));
-    assert_eq!(eval_fresh("(if (list) 1 2)").unwrap(), Value::Number(2)); // empty list is falsy
+    assert_eq!(eval_fresh("(if #t 1 2)").unwrap(), Value::Number(1));
+    
+    // Non-boolean if conditions should error
+    assert!(matches!(eval_fresh("(if 0 1 2)"), Err(SchemeError::TypeError(_))));
+    assert!(matches!(eval_fresh("(if () 1 2)"), Err(SchemeError::TypeError(_))));
+    assert!(matches!(eval_fresh("(if \"\" 1 2)"), Err(SchemeError::TypeError(_))));
+    
+    // and/or also require boolean arguments (stricter than standard Scheme)
+    assert_eq!(eval_fresh("(and #f #t)").unwrap(), Value::Bool(false));
+    assert_eq!(eval_fresh("(and #t #t)").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(or #f #t)").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(or #f #f)").unwrap(), Value::Bool(false));
+    
+    // Non-boolean and/or arguments should error
+    assert!(matches!(eval_fresh("(and 0 1)"), Err(SchemeError::TypeError(_))));
+    assert!(matches!(eval_fresh("(or \"\" 1)"), Err(SchemeError::TypeError(_))));
 }
 
 #[test]
@@ -251,37 +273,43 @@ fn test_self_evaluating_forms() {
 
 #[test]
 fn test_logic_operators() {
-    // Test 'and' with various inputs
+    // Test 'and' with boolean inputs only
     assert_eq!(eval_fresh("(and)").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("(and #t)").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("(and #f)").unwrap(), Value::Bool(false));
     assert_eq!(eval_fresh("(and #t #t #t)").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("(and #t #f #t)").unwrap(), Value::Bool(false));
-    assert_eq!(eval_fresh("(and 1 2 3)").unwrap(), Value::Number(3)); // returns last value
-    assert_eq!(eval_fresh("(and 1 #f 3)").unwrap(), Value::Bool(false)); // short-circuit
-    assert_eq!(eval_fresh("(and \"hello\" 42)").unwrap(), Value::Number(42));
     
-    // Test 'or' with various inputs
+    // Test that 'and' rejects non-boolean inputs
+    assert!(eval_fresh("(and 1 2 3)").is_err()); // should error with non-booleans
+    assert!(eval_fresh("(and 1 #f 3)").is_err()); // should error with non-booleans
+    assert!(eval_fresh("(and \"hello\" 42)").is_err()); // should error with non-booleans
+    
+    // Test 'or' with boolean inputs only
     assert_eq!(eval_fresh("(or)").unwrap(), Value::Bool(false));
     assert_eq!(eval_fresh("(or #t)").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("(or #f)").unwrap(), Value::Bool(false));
     assert_eq!(eval_fresh("(or #f #f #t)").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("(or #f #f #f)").unwrap(), Value::Bool(false));
-    assert_eq!(eval_fresh("(or #f 2 3)").unwrap(), Value::Number(2)); // returns first truthy
-    assert_eq!(eval_fresh("(or 1 2 3)").unwrap(), Value::Number(1)); // short-circuit
-    assert_eq!(eval_fresh("(or () #f 42)").unwrap(), Value::Number(42));
     
-    // Test 'not' with various inputs
+    // Test that 'or' rejects non-boolean inputs
+    assert!(eval_fresh("(or #f 2 3)").is_err()); // should error with non-booleans
+    assert!(eval_fresh("(or 1 2 3)").is_err()); // should error with non-booleans
+    assert!(eval_fresh("(or () #f 42)").is_err()); // should error with non-booleans
+    
+    // Test 'not' with boolean inputs only
     assert_eq!(eval_fresh("(not #t)").unwrap(), Value::Bool(false));
     assert_eq!(eval_fresh("(not #f)").unwrap(), Value::Bool(true));
-    assert_eq!(eval_fresh("(not ())").unwrap(), Value::Bool(true)); // nil is falsy
-    assert_eq!(eval_fresh("(not 0)").unwrap(), Value::Bool(false)); // 0 is truthy
-    assert_eq!(eval_fresh("(not 42)").unwrap(), Value::Bool(false));
-    assert_eq!(eval_fresh("(not \"hello\")").unwrap(), Value::Bool(false));
-    assert_eq!(eval_fresh("(not (list))").unwrap(), Value::Bool(true)); // empty list is falsy
-    assert_eq!(eval_fresh("(not (list 1))").unwrap(), Value::Bool(false)); // non-empty list is truthy
     
-    // Test combinations and complex expressions
+    // Test that 'not' rejects non-boolean inputs
+    assert!(eval_fresh("(not ())").is_err()); // should error with non-boolean
+    assert!(eval_fresh("(not 0)").is_err()); // should error with non-boolean
+    assert!(eval_fresh("(not 42)").is_err()); // should error with non-boolean
+    assert!(eval_fresh("(not \"hello\")").is_err()); // should error with non-boolean
+    assert!(eval_fresh("(not (list))").is_err()); // should error with non-boolean
+    assert!(eval_fresh("(not (list 1))").is_err()); // should error with non-boolean
+    
+    // Test combinations and complex expressions (all with booleans)
     assert_eq!(eval_fresh("(and (or #f #t) (not #f))").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("(or (and #f #t) (not #f))").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("(not (and #t #f))").unwrap(), Value::Bool(true));
