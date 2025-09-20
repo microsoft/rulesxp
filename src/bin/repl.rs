@@ -44,7 +44,7 @@ fn main() {
                         Ok(result) => println!("{}", result),
                         Err(e) => println!("Error: {}", e),
                     },
-                    Err(e) => println!("Parse error: {}", e),
+                    Err(e) => println!("Error: {}", e),
                 }
             }
             Err(ReadlineError::Interrupted) => {

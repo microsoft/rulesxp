@@ -1,6 +1,6 @@
 # Mini Scheme Interpreter
 
-A minimal Scheme-compatible interpreter implemented in Rust, built for simplicity.
+A minimal Scheme-compatible interpreter implemented in Rust, for evaluating S-expressions with strict type safety and comprehensive error handling.
 
 ## Features
 
@@ -321,4 +321,5 @@ This is a **minimal** Scheme interpreter with intentionally **stricter semantics
 - Advanced numeric types (rationals, complex numbers)
 - Quote syntax sugar (`'x` for `(quote x)`)
 - Full R7RS compliance
+
 

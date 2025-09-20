@@ -16,24 +16,39 @@ pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
         
         // List evaluation (function application or special forms)
         Value::List(elements) => {
-            if elements.is_empty() {
-                return Err(SchemeError::EvalError("Cannot evaluate empty list".to_string()));
-            }
-            
-            match &elements[0] {
-                // Special forms
-                Value::Symbol(name) => match name.as_str() {
-                    "quote" => eval_quote(&elements[1..]),
-                    "define" => eval_define(&elements[1..], env),
-                    "if" => eval_if(&elements[1..], env),
-                    "lambda" => eval_lambda(&elements[1..], env),
-                    "and" => eval_and(&elements[1..], env),
-                    "or" => eval_or(&elements[1..], env),
-                    _ => eval_application(elements, env),
-                },
-                _ => eval_application(elements, env),
-            }
+            eval_list(elements, env).map_err(|err| add_context(err, expr))
         }
+    }
+}
+
+/// Helper function to add expression context to errors
+fn add_context(error: SchemeError, expr: &Value) -> SchemeError {
+    let context = format!("while evaluating: {}", expr);
+    match error {
+        SchemeError::EvalError(msg) => SchemeError::EvalError(format!("{}\n  Context: {}", msg, context)),
+        SchemeError::TypeError(msg) => SchemeError::TypeError(format!("{}\n  Context: {}", msg, context)),
+        _ => error, // Don't add context to parse errors, unbound variables, or arity errors (they have their own context)
+    }
+}
+
+/// Evaluate a list expression (function application or special forms)
+fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+    if elements.is_empty() {
+        return Err(SchemeError::EvalError("Cannot evaluate empty list".to_string()));
+    }
+    
+    match &elements[0] {
+        // Special forms
+        Value::Symbol(name) => match name.as_str() {
+            "quote" => eval_quote(&elements[1..]),
+            "define" => eval_define(&elements[1..], env),
+            "if" => eval_if(&elements[1..], env),
+            "lambda" => eval_lambda(&elements[1..], env),
+            "and" => eval_and(&elements[1..], env),
+            "or" => eval_or(&elements[1..], env),
+            _ => eval_application(elements, env),
+        },
+        _ => eval_application(elements, env),
     }
 }
 
@@ -191,8 +206,12 @@ fn apply_function(func: &Value, args: &[Value], _env: &mut Environment) -> Resul
                 new_env.define(param.clone(), arg.clone());
             }
             
-            // Evaluate body in new environment
-            eval(body, &mut new_env)
+            // Evaluate body with context
+            eval(body, &mut new_env).map_err(|err| match err {
+                SchemeError::EvalError(msg) => SchemeError::EvalError(format!("{}\n  In lambda: {}", msg, body)),
+                SchemeError::TypeError(msg) => SchemeError::TypeError(format!("{}\n  In lambda: {}", msg, body)),
+                other => other,
+            })
         }
         _ => Err(SchemeError::TypeError(format!("Cannot apply non-function: {}", func))),
     }
@@ -632,35 +651,35 @@ mod tests {
         let result = eval_string("(error \"Something went wrong\")");
         assert!(result.is_err());
         if let Err(SchemeError::EvalError(msg)) = result {
-            assert_eq!(msg, "Something went wrong");
+            assert!(msg.contains("Something went wrong"));
         }
         
         // Test error with symbol message
         let result = eval_string("(error oops)");
         assert!(result.is_err());
         if let Err(SchemeError::EvalError(msg)) = result {
-            assert_eq!(msg, "oops");
+            assert!(msg.contains("oops"));
         }
         
         // Test error with number message
         let result = eval_string("(error 42)");
         assert!(result.is_err());
         if let Err(SchemeError::EvalError(msg)) = result {
-            assert_eq!(msg, "42");
+            assert!(msg.contains("42"));
         }
         
         // Test error with multiple arguments
         let result = eval_string("(error \"Error:\" 42 \"occurred\")");
         assert!(result.is_err());
         if let Err(SchemeError::EvalError(msg)) = result {
-            assert_eq!(msg, "Error: 42 occurred");
+            assert!(msg.contains("Error: 42 occurred"));
         }
         
         // Test error with no arguments
         let result = eval_string("(error)");
         assert!(result.is_err());
         if let Err(SchemeError::EvalError(msg)) = result {
-            assert_eq!(msg, "Error");
+            assert!(msg.contains("Error"));
         }
     }
 }

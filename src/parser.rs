@@ -3,12 +3,43 @@ use nom::{
     bytes::complete::{tag, take_while1},
     character::complete::{char, multispace0, multispace1},
     combinator::{map, opt, recognize, value},
+    error::{Error, ErrorKind},
     multi::separated_list0,
     sequence::{delimited, pair, preceded, terminated},
     IResult,
 };
 
 use crate::{SchemeError, Value};
+
+/// Convert nom parsing errors to user-friendly messages
+fn parse_error_to_message(input: &str, error: nom::Err<Error<&str>>) -> String {
+    match error {
+        nom::Err::Error(e) | nom::Err::Failure(e) => {
+            let position = input.len().saturating_sub(e.input.len());
+            match e.code {
+                ErrorKind::TakeWhile1 => {
+                    if input.trim_start().starts_with('(') && !input.contains(')') {
+                        "Missing closing parenthesis".to_string()
+                    } else if input.trim_start().starts_with(')') {
+                        "Unexpected closing parenthesis".to_string()
+                    } else {
+                        format!("Invalid character at position {}", position)
+                    }
+                }
+                ErrorKind::Char => format!("Expected character at position {}", position),
+                ErrorKind::Tag => format!("Unexpected token at position {}", position),
+                _ => {
+                    if position < input.len() {
+                        format!("Invalid syntax near '{}'", &input[position..].chars().take(10).collect::<String>())
+                    } else {
+                        "Unexpected end of input".to_string()
+                    }
+                }
+            }
+        }
+        nom::Err::Incomplete(_) => "Incomplete input".to_string(),
+    }
+}
 
 /// Parse optional whitespace
 fn opt_whitespace(input: &str) -> IResult<&str, ()> {
@@ -161,10 +192,10 @@ pub fn parse(input: &str) -> Result<Value, SchemeError> {
     match terminated(parse_sexpr, opt_whitespace)(input) {
         Ok(("", value)) => Ok(value),
         Ok((remaining, _)) => Err(SchemeError::ParseError(format!(
-            "Unexpected remaining input: {}",
+            "Unexpected remaining input: '{}'",
             remaining
         ))),
-        Err(e) => Err(SchemeError::ParseError(format!("Parse error: {}", e))),
+        Err(e) => Err(SchemeError::ParseError(parse_error_to_message(input, e))),
     }
 }
 
