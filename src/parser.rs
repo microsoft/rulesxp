@@ -118,11 +118,22 @@ fn parse_nil(input: &str) -> IResult<&str, Value> {
     value(Value::Nil, tag("()"))(input)
 }
 
+/// Parse quoted expression ('expr -> (quote expr))
+fn parse_quote(input: &str) -> IResult<&str, Value> {
+    let (input, _) = char('\'')(input)?;
+    let (input, expr) = parse_sexpr(input)?;
+    Ok((input, Value::List(vec![
+        Value::Symbol("quote".to_string()),
+        expr,
+    ])))
+}
+
 /// Parse an S-expression
 fn parse_sexpr(input: &str) -> IResult<&str, Value> {
     preceded(
         opt_whitespace,
         alt((
+            parse_quote,
             parse_nil,
             parse_list,
             parse_number,
@@ -205,6 +216,40 @@ mod tests {
     #[test]
     fn test_parse_nil() {
         assert_eq!(parse("()").unwrap(), Value::Nil);
+    }
+
+    #[test]
+    fn test_parse_quote() {
+        // Test quote shorthand
+        assert_eq!(
+            parse("'foo").unwrap(),
+            Value::List(vec![
+                Value::Symbol("quote".to_string()),
+                Value::Symbol("foo".to_string())
+            ])
+        );
+        
+        // Test quote with list
+        assert_eq!(
+            parse("'(1 2 3)").unwrap(),
+            Value::List(vec![
+                Value::Symbol("quote".to_string()),
+                Value::List(vec![
+                    Value::Number(1),
+                    Value::Number(2),
+                    Value::Number(3)
+                ])
+            ])
+        );
+        
+        // Test quote with nil
+        assert_eq!(
+            parse("'()").unwrap(),
+            Value::List(vec![
+                Value::Symbol("quote".to_string()),
+                Value::Nil
+            ])
+        );
     }
 
     #[test]

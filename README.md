@@ -18,6 +18,8 @@ A minimal Scheme-compatible interpreter implemented in Rust, built for simplicit
   ```scheme
   (quote hello)       ; => hello
   (quote (1 2 3))     ; => (1 2 3)
+  'hello              ; => hello (shorthand)
+  '(1 2 3)            ; => (1 2 3) (shorthand)
   ```
 
 - **`define`**: Define variables and functions
@@ -180,6 +182,22 @@ scheme> (cdr my-list)
 (2 3 4 5)
 scheme> (cons 0 my-list)
 (0 1 2 3 4 5)
+```
+
+### Quote and Data Manipulation
+```scheme
+scheme> (quote hello)
+hello
+scheme> 'world
+world
+scheme> '(+ 1 2 3)
+(+ 1 2 3)
+scheme> (car '(a b c))
+a
+scheme> '()
+()
+scheme> (null? '())
+#t
 ```
 
 ### Lexical Scoping

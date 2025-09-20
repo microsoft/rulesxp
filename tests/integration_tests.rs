@@ -62,11 +62,36 @@ fn test_list_operations() {
 
 #[test]
 fn test_quote() {
+    // Test longhand (quote ...) syntax
     assert_eq!(eval_fresh("(quote hello)").unwrap(), Value::Symbol("hello".to_string()));
     assert_eq!(eval_fresh("(quote (1 2 3))").unwrap(),
                Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]));
     assert_eq!(eval_fresh("(quote (+ 1 2))").unwrap(),
                Value::List(vec![Value::Symbol("+".to_string()), Value::Number(1), Value::Number(2)]));
+    assert_eq!(eval_fresh("(quote ())").unwrap(), Value::Nil);
+    
+    // Test shorthand '... syntax  
+    assert_eq!(eval_fresh("'hello").unwrap(), Value::Symbol("hello".to_string()));
+    assert_eq!(eval_fresh("'(1 2 3)").unwrap(),
+               Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]));
+    assert_eq!(eval_fresh("'(+ 1 2)").unwrap(),
+               Value::List(vec![Value::Symbol("+".to_string()), Value::Number(1), Value::Number(2)]));
+    assert_eq!(eval_fresh("'()").unwrap(), Value::Nil);
+    
+    // Test that both forms are equivalent
+    assert_eq!(eval_fresh("'hello").unwrap(), eval_fresh("(quote hello)").unwrap());
+    assert_eq!(eval_fresh("'(a b c)").unwrap(), eval_fresh("(quote (a b c))").unwrap());
+    assert_eq!(eval_fresh("'()").unwrap(), eval_fresh("(quote ())").unwrap());
+    
+    // Test nested quotes
+    assert_eq!(eval_fresh("'(quote x)").unwrap(),
+               Value::List(vec![Value::Symbol("quote".to_string()), Value::Symbol("x".to_string())]));
+    assert_eq!(eval_fresh("''x").unwrap(),
+               Value::List(vec![Value::Symbol("quote".to_string()), Value::Symbol("x".to_string())]));
+    
+    // Test that empty list is self-evaluating (correct Scheme behavior)
+    assert_eq!(eval_fresh("()").unwrap(), Value::Nil);
+    assert_eq!(eval_fresh("()").unwrap(), eval_fresh("'()").unwrap());
 }
 
 #[test]
