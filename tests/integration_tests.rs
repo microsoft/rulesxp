@@ -56,7 +56,7 @@ fn test_list_operations() {
     assert_eq!(eval_fresh("(cons 0 (list 1 2))").unwrap(),
                Value::List(vec![Value::Number(0), Value::Number(1), Value::Number(2)]));
     
-    assert_eq!(eval_fresh("(null? ())").unwrap(), Value::Bool(true));
+    assert_eq!(eval_fresh("(null? '())").unwrap(), Value::Bool(true)); // Use quoted empty list
     assert_eq!(eval_fresh("(null? (list 1))").unwrap(), Value::Bool(false));
 }
 
@@ -68,7 +68,7 @@ fn test_quote() {
                Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]));
     assert_eq!(eval_fresh("(quote (+ 1 2))").unwrap(),
                Value::List(vec![Value::Symbol("+".to_string()), Value::Number(1), Value::Number(2)]));
-    assert_eq!(eval_fresh("(quote ())").unwrap(), Value::Nil);
+    assert_eq!(eval_fresh("(quote ())").unwrap(), Value::List(vec![])); // Empty list (nil)
     
     // Test shorthand '... syntax  
     assert_eq!(eval_fresh("'hello").unwrap(), Value::Symbol("hello".to_string()));
@@ -76,7 +76,7 @@ fn test_quote() {
                Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]));
     assert_eq!(eval_fresh("'(+ 1 2)").unwrap(),
                Value::List(vec![Value::Symbol("+".to_string()), Value::Number(1), Value::Number(2)]));
-    assert_eq!(eval_fresh("'()").unwrap(), Value::Nil);
+    assert_eq!(eval_fresh("'()").unwrap(), Value::List(vec![])); // Empty list (nil)
     
     // Test that both forms are equivalent
     assert_eq!(eval_fresh("'hello").unwrap(), eval_fresh("(quote hello)").unwrap());
@@ -89,9 +89,9 @@ fn test_quote() {
     assert_eq!(eval_fresh("''x").unwrap(),
                Value::List(vec![Value::Symbol("quote".to_string()), Value::Symbol("x".to_string())]));
     
-    // Test that empty list is self-evaluating (correct Scheme behavior)
-    assert_eq!(eval_fresh("()").unwrap(), Value::Nil);
-    assert_eq!(eval_fresh("()").unwrap(), eval_fresh("'()").unwrap());
+    // Test strict semantics: empty list is NOT self-evaluating (must be quoted)
+    assert!(eval_fresh("()").is_err()); // Empty list should error when evaluated
+    assert_eq!(eval_fresh("'()").unwrap(), Value::List(vec![])); // But quoted empty list works
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn test_if_expressions() {
     assert_eq!(eval_fresh("(if #t 1 2)").unwrap(), Value::Number(1));
     assert_eq!(eval_fresh("(if #f 1 2)").unwrap(), Value::Number(2));
     assert_eq!(eval_fresh("(if #t 1)").unwrap(), Value::Number(1));
-    assert_eq!(eval_fresh("(if #f 1)").unwrap(), Value::Nil);
+    assert_eq!(eval_fresh("(if #f 1)").unwrap(), Value::List(vec![])); // Empty list (nil)
     
     // Test with boolean expressions (these return booleans)
     assert_eq!(eval_fresh("(if (> 5 3) \"yes\" \"no\")").unwrap(), 
@@ -272,7 +272,7 @@ fn test_truthiness() {
     
     // Non-boolean if conditions should error
     assert!(matches!(eval_fresh("(if 0 1 2)"), Err(SchemeError::TypeError(_))));
-    assert!(matches!(eval_fresh("(if () 1 2)"), Err(SchemeError::TypeError(_))));
+    assert!(matches!(eval_fresh("(if () 1 2)"), Err(SchemeError::EvalError(_)))); // () causes eval error in strict mode
     assert!(matches!(eval_fresh("(if \"\" 1 2)"), Err(SchemeError::TypeError(_))));
     
     // and/or also require boolean arguments (stricter than standard Scheme)
@@ -293,7 +293,8 @@ fn test_self_evaluating_forms() {
     assert_eq!(eval_fresh("#t").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("#f").unwrap(), Value::Bool(false));
     assert_eq!(eval_fresh("\"hello world\"").unwrap(), Value::String("hello world".to_string()));
-    assert_eq!(eval_fresh("()").unwrap(), Value::Nil);
+    // Note: empty list () is NOT self-evaluating in strict mode - it should error when evaluated
+    assert!(eval_fresh("()").is_err()); // Empty list should cause evaluation error
 }
 
 #[test]

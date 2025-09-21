@@ -3,8 +3,8 @@ use crate::{Environment, SchemeError, Value};
 /// Evaluate an S-expression in the given environment
 pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
     match expr {
-        // Self-evaluating forms
-        Value::Number(_) | Value::String(_) | Value::Bool(_) | Value::Nil 
+        // Self-evaluating forms (empty lists are NOT self-evaluating for strict semantics)
+        Value::Number(_) | Value::String(_) | Value::Bool(_) 
         | Value::BuiltinFunction(_) | Value::Function { .. } => Ok(expr.clone()),
         
         // Variable lookup
@@ -91,7 +91,7 @@ fn eval_if(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> 
             if args.len() == 3 {
                 eval(&args[2], env)
             } else {
-                Ok(Value::Nil)
+                Ok(Value::List(vec![])) // Return empty list (nil) when no else clause
             }
         }
         _ => Err(SchemeError::TypeError("if condition must be a boolean".to_string())),
@@ -107,16 +107,20 @@ fn eval_lambda(args: &[Value], env: &Environment) -> Result<Value, SchemeError> 
     // Extract parameter names
     let params = match &args[0] {
         Value::List(param_list) => {
-            let mut params = Vec::new();
-            for param in param_list {
-                match param {
-                    Value::Symbol(name) => params.push(name.clone()),
-                    _ => return Err(SchemeError::TypeError("Lambda parameters must be symbols".to_string())),
+            if param_list.is_empty() {
+                // Empty list means no parameters
+                Vec::new()
+            } else {
+                let mut params = Vec::new();
+                for param in param_list {
+                    match param {
+                        Value::Symbol(name) => params.push(name.clone()),
+                        _ => return Err(SchemeError::TypeError("Lambda parameters must be symbols".to_string())),
+                    }
                 }
+                params
             }
-            params
         }
-        Value::Nil => Vec::new(),
         _ => return Err(SchemeError::TypeError("Lambda parameters must be a list".to_string())),
     };
     
@@ -409,11 +413,15 @@ fn builtin_cons(args: &[Value]) -> Result<Value, SchemeError> {
     
     match &args[1] {
         Value::List(list) => {
-            let mut new_list = vec![args[0].clone()];
-            new_list.extend_from_slice(list);
-            Ok(Value::List(new_list))
+            if list.is_empty() {
+                // cons with empty list (nil) creates a single-element list
+                Ok(Value::List(vec![args[0].clone()]))
+            } else {
+                let mut new_list = vec![args[0].clone()];
+                new_list.extend_from_slice(list);
+                Ok(Value::List(new_list))
+            }
         }
-        Value::Nil => Ok(Value::List(vec![args[0].clone()])),
         _ => Err(SchemeError::TypeError("cons requires a list as second argument".to_string())),
     }
 }
@@ -427,11 +435,7 @@ fn builtin_null(args: &[Value]) -> Result<Value, SchemeError> {
         return Err(SchemeError::ArityError { expected: 1, got: args.len() });
     }
     
-    let is_null = match &args[0] {
-        Value::Nil => true,
-        Value::List(list) => list.is_empty(),
-        _ => false,
-    };
+    let is_null = args[0].is_nil();
     
     Ok(Value::Bool(is_null))
 }
@@ -585,7 +589,7 @@ mod tests {
         assert_eq!(eval_string("(if #t 1 2)").unwrap(), Value::Number(1));
         assert_eq!(eval_string("(if #f 1 2)").unwrap(), Value::Number(2));
         assert_eq!(eval_string("(if #t 1)").unwrap(), Value::Number(1));
-        assert_eq!(eval_string("(if #f 1)").unwrap(), Value::Nil);
+        assert_eq!(eval_string("(if #f 1)").unwrap(), Value::List(vec![])); // Empty list (nil)
         
         // Test that if rejects non-boolean conditions
         assert!(eval_string("(if 0 1 2)").is_err()); // should error with non-boolean

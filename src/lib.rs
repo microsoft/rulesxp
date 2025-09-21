@@ -12,10 +12,8 @@ pub enum Value {
     String(String),
     /// Boolean values
     Bool(bool),
-    /// Lists (including proper and improper lists)
+    /// Lists (including proper and improper lists, empty list represents nil)
     List(Vec<Value>),
-    /// Nil/empty list
-    Nil,
     /// Built-in functions
     BuiltinFunction(fn(&[Value]) -> Result<Value, SchemeError>),
     /// User-defined functions (params, body, closure env)
@@ -62,7 +60,6 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::Nil => write!(f, "()"),
             Value::BuiltinFunction(_) => write!(f, "#<builtin-function>"),
             Value::Function { .. } => write!(f, "#<function>"),
         }
@@ -70,12 +67,19 @@ impl fmt::Display for Value {
 }
 
 impl Value {
-    /// Check if a value is truthy according to Scheme semantics
-    /// In Scheme, only #f and () (empty list) are falsy, everything else is truthy
+    /// Check if a value represents nil (empty list)
+    pub fn is_nil(&self) -> bool {
+        match self {
+            Value::List(list) if list.is_empty() => true,
+            _ => false,
+        }
+    }
+
+    /// Check if a value is truthy according to strict semantics
+    /// Only #f is falsy, everything else (including empty lists) is truthy
     pub fn is_truthy(&self) -> bool {
         match self {
-            Value::Bool(false) | Value::Nil => false,
-            Value::List(list) if list.is_empty() => false,
+            Value::Bool(false) => false,
             _ => true,
         }
     }

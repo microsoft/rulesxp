@@ -144,9 +144,9 @@ fn parse_string(input: &str) -> IResult<&str, Value> {
     Ok((remaining, Value::String(chars.into_iter().collect())))
 }
 
-/// Parse nil (empty list)
+/// Parse nil (empty list) - returns empty list
 fn parse_nil(input: &str) -> IResult<&str, Value> {
-    value(Value::Nil, tag("()"))(input)
+    value(Value::List(vec![]), tag("()"))(input)
 }
 
 /// Parse quoted expression ('expr -> (quote expr))
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_parse_nil() {
-        assert_eq!(parse("()").unwrap(), Value::Nil);
+        assert_eq!(parse("()").unwrap(), Value::List(vec![]));
     }
 
     #[test]
@@ -278,7 +278,7 @@ mod tests {
             parse("'()").unwrap(),
             Value::List(vec![
                 Value::Symbol("quote".to_string()),
-                Value::Nil
+                Value::List(vec![])
             ])
         );
     }
