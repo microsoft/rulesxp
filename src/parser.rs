@@ -30,7 +30,8 @@ fn parse_error_to_message(input: &str, error: nom::Err<Error<&str>>) -> String {
                 ErrorKind::Tag => format!("Unexpected token at position {}", position),
                 _ => {
                     if position < input.len() {
-                        format!("Invalid syntax near '{}'", &input[position..].chars().take(10).collect::<String>())
+                        let remaining_chars: String = input.chars().skip(position).take(10).collect();
+                        format!("Invalid syntax near '{}'", remaining_chars)
                     } else {
                         "Unexpected end of input".to_string()
                     }
