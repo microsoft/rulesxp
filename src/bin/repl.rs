@@ -1,14 +1,18 @@
-use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
-use sexpr::{evaluator, parser};
+use rustyline::error::ReadlineError;
+use sexpr::{evaluator, parse_jsonlogic, parse_scheme};
+use sexpr::jsonlogic::value_to_jsonlogic;
 
 fn main() {
-    println!("Mini Scheme Interpreter v0.1.0");
-    println!("Type expressions to evaluate them, or Ctrl+C to exit.");
+    println!("Mini Scheme Interpreter v0.1.0 with JSONLogic Support");
+    println!("Enter S-expressions like: (+ 1 2)");
+    println!("Enter JSONLogic like: {{\"and\": [true, {{\">\":[5,3]}}]}}");
+    println!("Type :help for more commands, or Ctrl+C to exit.");
     println!();
 
     let mut rl = DefaultEditor::new().unwrap();
     let mut env = evaluator::create_global_env();
+    let mut jsonlogic_mode = false;
 
     loop {
         match rl.readline("scheme> ") {
@@ -31,6 +35,19 @@ fn main() {
                         print_environment(&env);
                         continue;
                     }
+                    ":jsonlogic" => {
+                        jsonlogic_mode = !jsonlogic_mode;
+                        if jsonlogic_mode {
+                            println!("JSONLogic mode enabled:");
+                            println!("  • Results shown as JSONLogic");
+                            println!("  • Scheme inputs show JSONLogic translation (→)");
+                        } else {
+                            println!("Scheme mode enabled:");
+                            println!("  • Results shown as S-expressions"); 
+                            println!("  • JSONLogic inputs show Scheme translation (→)");
+                        }
+                        continue;
+                    }
                     ":quit" | ":exit" => {
                         println!("Goodbye!");
                         break;
@@ -39,11 +56,48 @@ fn main() {
                 }
 
                 // Try to parse and evaluate the expression
-                match parser::parse(line) {
-                    Ok(expr) => match evaluator::eval(&expr, &mut env) {
-                        Ok(result) => println!("{}", result),
-                        Err(e) => println!("Error: {}", e),
-                    },
+                // First check if input looks like JSON (starts with { or [)
+                let result =
+                    if line.trim_start().starts_with('{') || line.trim_start().starts_with('[') {
+                        // Try JSONLogic parsing
+                        match parse_jsonlogic(line) {
+                            Ok(expr) => {
+                                // If in Scheme mode, show the parsed expression as Scheme
+                                if !jsonlogic_mode {
+                                    println!("→ {}", expr);
+                                }
+                                evaluator::eval(&expr, &mut env)
+                            }
+                            Err(e) => Err(e),
+                        }
+                    } else {
+                        // Try Scheme parsing
+                        match parse_scheme(line) {
+                            Ok(expr) => {
+                                // If in JSONLogic mode, show the parsed expression as JSONLogic
+                                if jsonlogic_mode {
+                                    match value_to_jsonlogic(&expr) {
+                                        Ok(json_str) => println!("→ {}", json_str),
+                                        Err(_) => {} // Skip if conversion fails
+                                    }
+                                }
+                                evaluator::eval(&expr, &mut env)
+                            }
+                            Err(e) => Err(e),
+                        }
+                    };
+
+                match result {
+                    Ok(result) => {
+                        if jsonlogic_mode {
+                            match value_to_jsonlogic(&result) {
+                                Ok(json_str) => println!("{}", json_str),
+                                Err(_) => println!("{}", result), // Fallback to S-expression if conversion fails
+                            }
+                        } else {
+                            println!("{}", result);
+                        }
+                    }
                     Err(e) => println!("Error: {}", e),
                 }
             }
@@ -63,28 +117,34 @@ fn main() {
 }
 
 fn print_help() {
-    println!("Mini Scheme Interpreter Commands:");
-    println!("  :help    - Show this help message");
-    println!("  :env     - Show current environment bindings");
-    println!("  :quit    - Exit the interpreter");
-    println!("  :exit    - Exit the interpreter");
+    println!("Mini Scheme Interpreter with JSONLogic Support:");
+    println!("  :help      - Show this help message");
+    println!("  :env       - Show current environment bindings");
+    println!("  :jsonlogic - Toggle JSONLogic output mode");
+    println!("               • Scheme mode: results as S-expressions, shows JSONLogic translation (→)");
+    println!("               • JSONLogic mode: results as JSONLogic, shows Scheme translation (→)");
+    println!("  :quit      - Exit the interpreter");
+    println!("  :exit      - Exit the interpreter");
     println!();
-    println!("Supported Scheme features:");
-    println!("  Numbers: 42, 3.14, -5");
-    println!("  Booleans: #t, #f");
-    println!("  Strings: \"hello world\"");
-    println!("  Lists: (1 2 3), (list 1 2 3)");
+    println!("Supported languages:");
+    println!("  S-expressions (Scheme): (+ 1 2), (and #t (> 5 3))");
+    println!("  JSONLogic: {{\"and\": [true, {{\">\":[5,3]}}]}}");
+    println!();
+    println!("Supported operations (both languages):");
+    println!("  Numbers: 42, -5");
+    println!("  Booleans: #t/#f (Scheme) or true/false (JSON)");
     println!("  Arithmetic: +, -, *, /");
-    println!("  Comparison: =, <, >");
-    println!("  List operations: car, cdr, cons, list, null?");
-    println!("  Special forms: quote, define, if, lambda");
+    println!("  Comparison: =, <, >, <=, >=, !=");
+    println!("  Logic: and, or, not");
+    println!("  Conditionals: if");
+    println!("  Variables: var (JSONLogic)");
     println!();
     println!("Examples:");
     println!("  (+ 1 2 3)");
-    println!("  (define x 42)");
-    println!("  (if (> x 0) \"positive\" \"not positive\")");
-    println!("  (define square (lambda (x) (* x x)))");
-    println!("  (square 5)");
+    println!("  {{\">\": [5, 3]}}");
+    println!("  (and #t (> 5 3))");
+    println!("  {{\"and\": [true, {{\">\":[5,3]}}]}}");
+    println!();
 }
 
 fn print_environment(_env: &sexpr::Environment) {

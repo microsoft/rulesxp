@@ -124,5 +124,10 @@ impl Environment {
     }
 }
 
-pub mod parser;
 pub mod evaluator;
+pub mod jsonlogic;
+pub mod parser;
+
+// Re-export the parsing functions for convenience
+pub use jsonlogic::parse_jsonlogic;
+pub use parser::parse as parse_scheme;
