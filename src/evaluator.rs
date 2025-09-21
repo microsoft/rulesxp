@@ -107,19 +107,14 @@ fn eval_lambda(args: &[Value], env: &Environment) -> Result<Value, SchemeError> 
     // Extract parameter names
     let params = match &args[0] {
         Value::List(param_list) => {
-            if param_list.is_empty() {
-                // Empty list means no parameters
-                Vec::new()
-            } else {
-                let mut params = Vec::new();
-                for param in param_list {
-                    match param {
-                        Value::Symbol(name) => params.push(name.clone()),
-                        _ => return Err(SchemeError::TypeError("Lambda parameters must be symbols".to_string())),
-                    }
+            let mut params = Vec::new();
+            for param in param_list {
+                match param {
+                    Value::Symbol(name) => params.push(name.clone()),
+                    _ => return Err(SchemeError::TypeError("Lambda parameters must be symbols".to_string())),
                 }
-                params
             }
+            params
         }
         _ => return Err(SchemeError::TypeError("Lambda parameters must be a list".to_string())),
     };
@@ -258,6 +253,29 @@ pub fn create_global_env() -> Environment {
 
 // Built-in function implementations
 
+// Macro to generate numeric comparison functions
+macro_rules! numeric_comparison {
+    ($name:ident, $op:tt, $op_str:expr) => {
+        fn $name(args: &[Value]) -> Result<Value, SchemeError> {
+            if args.len() != 2 {
+                return Err(SchemeError::ArityError { expected: 2, got: args.len() });
+            }
+            
+            match (&args[0], &args[1]) {
+                (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a $op b)),
+                _ => Err(SchemeError::TypeError(concat!($op_str, " requires numbers").to_string())),
+            }
+        }
+    };
+}
+
+// Generate all comparison functions
+numeric_comparison!(builtin_eq, ==, "=");
+numeric_comparison!(builtin_lt, <, "<");
+numeric_comparison!(builtin_gt, >, ">");
+numeric_comparison!(builtin_le, <=, "<=");
+numeric_comparison!(builtin_ge, >=, ">=");
+
 fn builtin_add(args: &[Value]) -> Result<Value, SchemeError> {
     let mut sum = 0i64;
     for arg in args {
@@ -316,62 +334,6 @@ fn builtin_mul(args: &[Value]) -> Result<Value, SchemeError> {
     Ok(Value::Number(product))
 }
 
-fn builtin_eq(args: &[Value]) -> Result<Value, SchemeError> {
-    if args.len() != 2 {
-        return Err(SchemeError::ArityError { expected: 2, got: args.len() });
-    }
-    
-    // Scheme's = is numeric equality only
-    match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a == b)),
-        _ => Err(SchemeError::TypeError("= requires numbers".to_string())),
-    }
-}
-
-fn builtin_lt(args: &[Value]) -> Result<Value, SchemeError> {
-    if args.len() != 2 {
-        return Err(SchemeError::ArityError { expected: 2, got: args.len() });
-    }
-    
-    match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a < b)),
-        _ => Err(SchemeError::TypeError("< requires numbers".to_string())),
-    }
-}
-
-fn builtin_gt(args: &[Value]) -> Result<Value, SchemeError> {
-    if args.len() != 2 {
-        return Err(SchemeError::ArityError { expected: 2, got: args.len() });
-    }
-    
-    match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a > b)),
-        _ => Err(SchemeError::TypeError("> requires numbers".to_string())),
-    }
-}
-
-fn builtin_le(args: &[Value]) -> Result<Value, SchemeError> {
-    if args.len() != 2 {
-        return Err(SchemeError::ArityError { expected: 2, got: args.len() });
-    }
-    
-    match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a <= b)),
-        _ => Err(SchemeError::TypeError("<= requires numbers".to_string())),
-    }
-}
-
-fn builtin_ge(args: &[Value]) -> Result<Value, SchemeError> {
-    if args.len() != 2 {
-        return Err(SchemeError::ArityError { expected: 2, got: args.len() });
-    }
-    
-    match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a >= b)),
-        _ => Err(SchemeError::TypeError(">= requires numbers".to_string())),
-    }
-}
-
 fn builtin_car(args: &[Value]) -> Result<Value, SchemeError> {
     if args.len() != 1 {
         return Err(SchemeError::ArityError { expected: 1, got: args.len() });
@@ -413,14 +375,9 @@ fn builtin_cons(args: &[Value]) -> Result<Value, SchemeError> {
     
     match &args[1] {
         Value::List(list) => {
-            if list.is_empty() {
-                // cons with empty list (nil) creates a single-element list
-                Ok(Value::List(vec![args[0].clone()]))
-            } else {
-                let mut new_list = vec![args[0].clone()];
-                new_list.extend_from_slice(list);
-                Ok(Value::List(new_list))
-            }
+            let mut new_list = vec![args[0].clone()];
+            new_list.extend_from_slice(list);
+            Ok(Value::List(new_list))
         }
         _ => Err(SchemeError::TypeError("cons requires a list as second argument".to_string())),
     }
@@ -434,10 +391,7 @@ fn builtin_null(args: &[Value]) -> Result<Value, SchemeError> {
     if args.len() != 1 {
         return Err(SchemeError::ArityError { expected: 1, got: args.len() });
     }
-    
-    let is_null = args[0].is_nil();
-    
-    Ok(Value::Bool(is_null))
+    Ok(Value::Bool(args[0].is_nil()))
 }
 
 fn builtin_not(args: &[Value]) -> Result<Value, SchemeError> {
@@ -457,8 +411,7 @@ fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
     }
     
     // Scheme's equal? is structural equality for all types
-    let result = args[0] == args[1];
-    Ok(Value::Bool(result))
+    Ok(Value::Bool(args[0] == args[1]))
 }
 
 fn builtin_error(args: &[Value]) -> Result<Value, SchemeError> {

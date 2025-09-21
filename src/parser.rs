@@ -41,11 +41,6 @@ fn parse_error_to_message(input: &str, error: nom::Err<Error<&str>>) -> String {
     }
 }
 
-/// Parse optional whitespace
-fn opt_whitespace(input: &str) -> IResult<&str, ()> {
-    value((), multispace0)(input)
-}
-
 /// Parse a number (integer only, supports decimal and hexadecimal)
 fn parse_number(input: &str) -> IResult<&str, Value> {
     alt((parse_hexadecimal, parse_decimal))(input)
@@ -92,13 +87,8 @@ fn parse_bool(input: &str) -> IResult<&str, Value> {
 
 /// Parse a symbol (identifier)
 fn parse_symbol(input: &str) -> IResult<&str, Value> {
-    let symbol_char = |c: char| {
-        c.is_alphanumeric() 
-            || "+-*/<>=!?_".contains(c)
-    };
-    
     map(
-        take_while1(symbol_char),
+        take_while1(|c: char| c.is_alphanumeric() || "+-*/<>=!?_".contains(c)),
         |s: &str| Value::Symbol(s.to_string()),
     )(input)
 }
@@ -144,11 +134,6 @@ fn parse_string(input: &str) -> IResult<&str, Value> {
     Ok((remaining, Value::String(chars.into_iter().collect())))
 }
 
-/// Parse nil (empty list) - returns empty list
-fn parse_nil(input: &str) -> IResult<&str, Value> {
-    value(Value::List(vec![]), tag("()"))(input)
-}
-
 /// Parse quoted expression ('expr -> (quote expr))
 fn parse_quote(input: &str) -> IResult<&str, Value> {
     let (input, _) = char('\'')(input)?;
@@ -162,10 +147,9 @@ fn parse_quote(input: &str) -> IResult<&str, Value> {
 /// Parse an S-expression
 fn parse_sexpr(input: &str) -> IResult<&str, Value> {
     preceded(
-        opt_whitespace,
+        multispace0,
         alt((
             parse_quote,
-            parse_nil,
             parse_list,
             parse_number,
             parse_bool,
@@ -180,16 +164,19 @@ fn parse_list(input: &str) -> IResult<&str, Value> {
     delimited(
         char('('),
         map(
-            separated_list0(multispace1, parse_sexpr),
+            preceded(
+                multispace0,
+                separated_list0(multispace1, parse_sexpr)
+            ),
             Value::List,
         ),
-        preceded(opt_whitespace, char(')')),
+        preceded(multispace0, char(')')),
     )(input)
 }
 
 /// Parse a complete S-expression from input
 pub fn parse(input: &str) -> Result<Value, SchemeError> {
-    match terminated(parse_sexpr, opt_whitespace)(input) {
+    match terminated(parse_sexpr, multispace0)(input) {
         Ok(("", value)) => Ok(value),
         Ok((remaining, _)) => Err(SchemeError::ParseError(format!(
             "Unexpected remaining input: '{}'",

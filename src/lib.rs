@@ -74,21 +74,6 @@ impl Value {
             _ => false,
         }
     }
-
-    /// Check if a value is truthy according to strict semantics
-    /// Only #f is falsy, everything else (including empty lists) is truthy
-    pub fn is_truthy(&self) -> bool {
-        match self {
-            Value::Bool(false) => false,
-            _ => true,
-        }
-    }
-
-    /// Check if a value is falsy according to Scheme semantics
-    /// This is the logical inverse of is_truthy
-    pub fn is_falsy(&self) -> bool {
-        !self.is_truthy()
-    }
 }
 
 impl fmt::Display for SchemeError {
