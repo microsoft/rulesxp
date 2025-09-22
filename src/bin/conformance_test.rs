@@ -1,4 +1,5 @@
-use sexpr::{evaluator, parse_jsonlogic};
+use sexpr::evaluator;
+use sexpr::jsonlogic::parse_jsonlogic;
 
 fn main() {
     println!("=== JSONLogic Conformance Test ===\n");
@@ -220,7 +221,7 @@ fn main() {
     }
 }
 
-fn test_jsonlogic_expression(expr: &str, env: &mut sexpr::Environment) -> String {
+fn test_jsonlogic_expression(expr: &str, env: &mut sexpr::evaluator::Environment) -> String {
     match parse_jsonlogic(expr) {
         Ok(parsed) => match evaluator::eval(&parsed, env) {
             Ok(result) => format!("{}", result),

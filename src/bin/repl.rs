@@ -1,7 +1,8 @@
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
-use sexpr::{evaluator, parse_jsonlogic, parse_scheme};
-use sexpr::jsonlogic::value_to_jsonlogic;
+use sexpr::evaluator;
+use sexpr::jsonlogic::{parse_jsonlogic, value_to_jsonlogic};
+use sexpr::parser::parse as parse_scheme;
 
 fn main() {
     println!("Mini Scheme Interpreter v0.1.0 with JSONLogic Support");
@@ -147,6 +148,6 @@ fn print_help() {
     println!();
 }
 
-fn print_environment(_env: &sexpr::Environment) {
+fn print_environment(_env: &sexpr::evaluator::Environment) {
     println!("TODO: Print environment");
 }

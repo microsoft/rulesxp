@@ -1,4 +1,43 @@
-use crate::{Environment, SchemeError, Value};
+use crate::ast::Value;
+use crate::SchemeError;
+use std::collections::HashMap;
+
+/// Environment for variable bindings
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Environment {
+    bindings: HashMap<String, Value>,
+    parent: Option<Box<Environment>>,
+}
+
+impl Environment {
+    pub fn new() -> Self {
+        Environment {
+            bindings: HashMap::new(),
+            parent: None,
+        }
+    }
+
+    pub fn with_parent(parent: Environment) -> Self {
+        Environment {
+            bindings: HashMap::new(),
+            parent: Some(Box::new(parent)),
+        }
+    }
+
+    pub fn define(&mut self, name: String, value: Value) {
+        self.bindings.insert(name, value);
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Value> {
+        self.bindings
+            .get(name)
+            .or_else(|| self.parent.as_ref().and_then(|parent| parent.get(name)))
+    }
+
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
+        self.bindings.get_mut(name)
+    }
+}
 
 /// Evaluate an S-expression in the given environment
 pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {

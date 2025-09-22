@@ -9,7 +9,8 @@ use nom::{
     sequence::{delimited, pair, preceded, terminated},
 };
 
-use crate::{SchemeError, Value};
+use crate::ast::Value;
+use crate::SchemeError;
 
 /// Convert nom parsing errors to user-friendly messages
 fn parse_error_to_message(input: &str, error: nom::Err<Error<&str>>) -> String {

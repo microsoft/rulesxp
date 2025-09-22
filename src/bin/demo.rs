@@ -1,4 +1,6 @@
-use sexpr::{evaluator, parse_jsonlogic, parse_scheme};
+use sexpr::evaluator;
+use sexpr::jsonlogic::parse_jsonlogic;
+use sexpr::parser::parse as parse_scheme;
 
 fn main() {
     println!("=== Dual-Language Scheme/JSONLogic Demo ===\n");

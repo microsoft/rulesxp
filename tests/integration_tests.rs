@@ -1,4 +1,7 @@
-use sexpr::{Environment, SchemeError, Value, evaluator, parser};
+use sexpr::ast::Value;
+use sexpr::evaluator::{self, Environment};
+use sexpr::parser;
+use sexpr::SchemeError;
 
 /// Helper function to parse and evaluate a string expression
 fn eval_string(input: &str, env: &mut Environment) -> Result<Value, SchemeError> {

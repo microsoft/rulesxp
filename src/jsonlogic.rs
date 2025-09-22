@@ -1,4 +1,5 @@
-use crate::{SchemeError, Value};
+use crate::ast::Value;
+use crate::SchemeError;
 use serde_json;
 
 /// Get the Scheme function name for a JSONLogic operator
