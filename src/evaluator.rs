@@ -1,5 +1,8 @@
 use crate::ast::Value;
 use crate::SchemeError;
+use crate::builtinops::{
+    find_builtin_op_by_scheme_id, BUILTIN_OPS,
+};
 use std::collections::HashMap;
 
 /// Environment for variable bindings
@@ -74,6 +77,15 @@ fn add_context(error: SchemeError, expr: &Value) -> SchemeError {
     }
 }
 
+/// Helper function to evaluate a list of argument expressions
+fn eval_args(args: &[Value], env: &mut Environment) -> Result<Vec<Value>, SchemeError> {
+    let mut evaluated_args = Vec::new();
+    for arg_expr in args {
+        evaluated_args.push(eval(arg_expr, env)?);
+    }
+    Ok(evaluated_args)
+}
+
 /// Evaluate a list expression (function application or special forms)
 fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
     match elements {
@@ -81,22 +93,31 @@ fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeE
             "Cannot evaluate empty list".to_string(),
         )),
 
-        // Special forms
-        [Value::Symbol(name), args @ ..] => match name.as_str() {
-            "quote" => eval_quote(args),
-            "define" => eval_define(args, env),
-            "if" => eval_if(args, env),
-            "lambda" => eval_lambda(args, env),
-            "and" => eval_and(args, env),
-            "or" => eval_or(args, env),
-            _ => eval_application(elements, env),
+        // Check if first element is a symbol that might be a builtin operation
+        [Value::Symbol(name), args @ ..] => {
+            if let Some(builtin_op) = find_builtin_op_by_scheme_id(name) {
+                match &builtin_op.op_kind {
+                    crate::builtinops::OpKind::SpecialForm(special_form) => {
+                        // Call the special form function directly
+                        special_form(args, env)
+                    }
+                    crate::builtinops::OpKind::Function(builtin_func) => {
+                        // Evaluate arguments and call the builtin function directly
+                        let evaluated_args = eval_args(args, env)?;
+                        builtin_func(&evaluated_args)
+                    }
+                }
+            } else {
+                // Not a builtin, treat as normal function application
+                eval_application(elements, env)
+            }
         },
         _ => eval_application(elements, env),
     }
 }
 
 /// Evaluate quote special form
-fn eval_quote(args: &[Value]) -> Result<Value, SchemeError> {
+pub fn eval_quote(args: &[Value], _env: &mut Environment) -> Result<Value, SchemeError> {
     match args {
         [expr] => Ok(expr.clone()),
         _ => Err(SchemeError::ArityError {
@@ -107,7 +128,7 @@ fn eval_quote(args: &[Value]) -> Result<Value, SchemeError> {
 }
 
 /// Evaluate define special form
-fn eval_define(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+pub fn eval_define(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
     match args {
         [Value::Symbol(name), expr] => {
             let value = eval(expr, env)?;
@@ -125,7 +146,7 @@ fn eval_define(args: &[Value], env: &mut Environment) -> Result<Value, SchemeErr
 }
 
 /// Evaluate if special form
-fn eval_if(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+pub fn eval_if(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
     match args {
         [condition_expr, then_expr] => {
             let condition = eval(condition_expr, env)?;
@@ -155,7 +176,7 @@ fn eval_if(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> 
 }
 
 /// Evaluate lambda special form
-fn eval_lambda(args: &[Value], env: &Environment) -> Result<Value, SchemeError> {
+pub fn eval_lambda(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
     match args {
         [Value::List(param_list), body] => {
             let mut params = Vec::new();
@@ -186,7 +207,7 @@ fn eval_lambda(args: &[Value], env: &Environment) -> Result<Value, SchemeError> 
 }
 
 /// Evaluate and special form (strict boolean evaluation)
-fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+pub fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
     // (and) returns #t
     if args.is_empty() {
         return Ok(Value::Bool(true));
@@ -212,7 +233,7 @@ fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError>
 }
 
 /// Evaluate or special form (strict boolean evaluation)
-fn eval_or(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+pub fn eval_or(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
     // (or) returns #f
     if args.is_empty() {
         return Ok(Value::Bool(false));
@@ -247,11 +268,8 @@ fn eval_application(elements: &[Value], env: &mut Environment) -> Result<Value, 
             // Evaluate the function
             let func = eval(func_expr, env)?;
 
-            // Evaluate the arguments
-            let mut args = Vec::new();
-            for arg_expr in arg_exprs {
-                args.push(eval(arg_expr, env)?);
-            }
+            // Evaluate the arguments using helper
+            let args = eval_args(arg_exprs, env)?;
 
             // Apply the function
             apply_function(&func, &args, env)
@@ -309,232 +327,14 @@ fn apply_function(
 pub fn create_global_env() -> Environment {
     let mut env = Environment::new();
 
-    // Arithmetic functions
-    env.define("+".to_string(), Value::BuiltinFunction(builtin_add));
-    env.define("-".to_string(), Value::BuiltinFunction(builtin_sub));
-    env.define("*".to_string(), Value::BuiltinFunction(builtin_mul));
-
-    // Comparison functions
-    env.define("=".to_string(), Value::BuiltinFunction(builtin_eq));
-    env.define("<".to_string(), Value::BuiltinFunction(builtin_lt));
-    env.define(">".to_string(), Value::BuiltinFunction(builtin_gt));
-    env.define("<=".to_string(), Value::BuiltinFunction(builtin_le));
-    env.define(">=".to_string(), Value::BuiltinFunction(builtin_ge));
-
-    // List functions
-    env.define("car".to_string(), Value::BuiltinFunction(builtin_car));
-    env.define("cdr".to_string(), Value::BuiltinFunction(builtin_cdr));
-    env.define("cons".to_string(), Value::BuiltinFunction(builtin_cons));
-    env.define("list".to_string(), Value::BuiltinFunction(builtin_list));
-    env.define("null?".to_string(), Value::BuiltinFunction(builtin_null));
-
-    // Logic functions
-    env.define("not".to_string(), Value::BuiltinFunction(builtin_not));
-
-    // General equality functions
-    env.define("equal?".to_string(), Value::BuiltinFunction(builtin_equal));
-
-    // Error function
-    env.define("error".to_string(), Value::BuiltinFunction(builtin_error));
+    // Add all regular functions from the registry
+    for (&scheme_id, builtin_op) in &BUILTIN_OPS {
+        if let crate::builtinops::OpKind::Function(func) = &builtin_op.op_kind {
+            env.define(scheme_id.to_string(), Value::BuiltinFunction(*func));
+        }
+    }
 
     env
-}
-
-// Built-in function implementations
-
-// Macro to generate numeric comparison functions
-macro_rules! numeric_comparison {
-    ($name:ident, $op:tt, $op_str:expr) => {
-        fn $name(args: &[Value]) -> Result<Value, SchemeError> {
-            if args.len() != 2 {
-                return Err(SchemeError::ArityError { expected: 2, got: args.len() });
-            }
-
-            match (&args[0], &args[1]) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a $op b)),
-                _ => Err(SchemeError::TypeError(concat!($op_str, " requires numbers").to_string())),
-            }
-        }
-    };
-}
-
-// Generate all comparison functions
-numeric_comparison!(builtin_eq, ==, "=");
-numeric_comparison!(builtin_lt, <, "<");
-numeric_comparison!(builtin_gt, >, ">");
-numeric_comparison!(builtin_le, <=, "<=");
-numeric_comparison!(builtin_ge, >=, ">=");
-
-fn builtin_add(args: &[Value]) -> Result<Value, SchemeError> {
-    let mut sum = 0i64;
-    for arg in args {
-        match arg {
-            Value::Number(n) => {
-                sum = sum.checked_add(*n).ok_or_else(|| {
-                    SchemeError::EvalError("Integer overflow in addition".to_string())
-                })?;
-            }
-            _ => return Err(SchemeError::TypeError("+ requires numbers".to_string())),
-        }
-    }
-    Ok(Value::Number(sum))
-}
-
-fn builtin_sub(args: &[Value]) -> Result<Value, SchemeError> {
-    match args {
-        [] => Err(SchemeError::ArityError {
-            expected: 1,
-            got: 0,
-        }),
-        [Value::Number(first)] => {
-            // Unary minus: check for overflow when negating
-            let result = first.checked_neg().ok_or_else(|| {
-                SchemeError::EvalError("Integer overflow in negation".to_string())
-            })?;
-            Ok(Value::Number(result))
-        }
-        [Value::Number(first), rest @ ..] => {
-            let mut result = *first;
-            for arg in rest {
-                match arg {
-                    Value::Number(n) => {
-                        result = result.checked_sub(*n).ok_or_else(|| {
-                            SchemeError::EvalError("Integer overflow in subtraction".to_string())
-                        })?;
-                    }
-                    _ => return Err(SchemeError::TypeError("- requires numbers".to_string())),
-                }
-            }
-            Ok(Value::Number(result))
-        }
-        _ => Err(SchemeError::TypeError("- requires numbers".to_string())),
-    }
-}
-
-fn builtin_mul(args: &[Value]) -> Result<Value, SchemeError> {
-    let mut product = 1i64;
-    for arg in args {
-        match arg {
-            Value::Number(n) => {
-                product = product.checked_mul(*n).ok_or_else(|| {
-                    SchemeError::EvalError("Integer overflow in multiplication".to_string())
-                })?;
-            }
-            _ => return Err(SchemeError::TypeError("* requires numbers".to_string())),
-        }
-    }
-    Ok(Value::Number(product))
-}
-
-fn builtin_car(args: &[Value]) -> Result<Value, SchemeError> {
-    match args {
-        [Value::List(list)] => match list.as_slice() {
-            [] => Err(SchemeError::EvalError("car of empty list".to_string())),
-            [first, ..] => Ok(first.clone()),
-        },
-        [_] => Err(SchemeError::TypeError("car requires a list".to_string())),
-        _ => Err(SchemeError::ArityError {
-            expected: 1,
-            got: args.len(),
-        }),
-    }
-}
-
-fn builtin_cdr(args: &[Value]) -> Result<Value, SchemeError> {
-    match args {
-        [Value::List(list)] => match list.as_slice() {
-            [] => Err(SchemeError::EvalError("cdr of empty list".to_string())),
-            [_, rest @ ..] => Ok(Value::List(rest.to_vec())),
-        },
-        [_] => Err(SchemeError::TypeError("cdr requires a list".to_string())),
-        _ => Err(SchemeError::ArityError {
-            expected: 1,
-            got: args.len(),
-        }),
-    }
-}
-
-fn builtin_cons(args: &[Value]) -> Result<Value, SchemeError> {
-    match args {
-        [first, Value::List(rest)] => {
-            let mut new_list = vec![first.clone()];
-            new_list.extend_from_slice(rest);
-            Ok(Value::List(new_list))
-        }
-        [_, _] => Err(SchemeError::TypeError(
-            "cons requires a list as second argument".to_string(),
-        )),
-        _ => Err(SchemeError::ArityError {
-            expected: 2,
-            got: args.len(),
-        }),
-    }
-}
-
-fn builtin_list(args: &[Value]) -> Result<Value, SchemeError> {
-    Ok(Value::List(args.to_vec()))
-}
-
-fn builtin_null(args: &[Value]) -> Result<Value, SchemeError> {
-    match args {
-        [value] => Ok(Value::Bool(value.is_nil())),
-        _ => Err(SchemeError::ArityError {
-            expected: 1,
-            got: args.len(),
-        }),
-    }
-}
-
-fn builtin_not(args: &[Value]) -> Result<Value, SchemeError> {
-    match args {
-        [Value::Bool(b)] => Ok(Value::Bool(!b)),
-        [_] => Err(SchemeError::TypeError(
-            "not requires a boolean argument".to_string(),
-        )),
-        _ => Err(SchemeError::ArityError {
-            expected: 1,
-            got: args.len(),
-        }),
-    }
-}
-
-fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
-    match args {
-        [first, second] => {
-            // Scheme's equal? is structural equality for all types
-            Ok(Value::Bool(first == second))
-        }
-        _ => Err(SchemeError::ArityError {
-            expected: 2,
-            got: args.len(),
-        }),
-    }
-}
-
-fn builtin_error(args: &[Value]) -> Result<Value, SchemeError> {
-    // Convert a value to error message string
-    fn value_to_error_string(value: &Value) -> String {
-        match value {
-            Value::String(s) => s.clone(), // Remove quotes for error messages
-            _ => format!("{}", value),     // Use Display trait for everything else
-        }
-    }
-
-    // Build multi-part error message
-    fn build_error_message(first: &Value, rest: &[Value]) -> String {
-        let mut message = value_to_error_string(first);
-        for arg in rest {
-            message.push(' ');
-            message.push_str(&value_to_error_string(arg));
-        }
-        message
-    }
-
-    match args {
-        [] => Err(SchemeError::EvalError("Error".to_string())),
-        [single] => Err(SchemeError::EvalError(value_to_error_string(single))),
-        [first, rest @ ..] => Err(SchemeError::EvalError(build_error_message(first, rest))),
-    }
 }
 
 #[cfg(test)]

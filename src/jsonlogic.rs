@@ -1,30 +1,7 @@
 use crate::ast::Value;
 use crate::SchemeError;
+use crate::builtinops::{map_jsonlogic_id_to_scheme, map_scheme_id_to_jsonlogic};
 use serde_json;
-
-/// Get the Scheme function name for a JSONLogic operator
-/// 
-/// To add new operator mappings, add a case to both this function and scheme_to_jsonlogic().
-/// Most operators that are identical in both languages don't need explicit mappings.
-fn jsonlogic_to_scheme(op: &str) -> &str {
-    match op {
-        "!" => "not",
-        "==" => "equal?",
-        _ => op, // Most operators are the same in both languages
-    }
-}
-
-/// Get the JSONLogic operator name for a Scheme function
-/// 
-/// To add new operator mappings, add a case to both this function and jsonlogic_to_scheme().
-/// Most operators that are identical in both languages don't need explicit mappings.
-fn scheme_to_jsonlogic(op: &str) -> &str {
-    match op {
-        "not" => "!",
-        "equal?" => "==",
-        _ => op, // Most operators are the same in both languages
-    }
-}
 
 /// Parse JSONLogic expression into our Value enum for evaluation
 pub fn parse_jsonlogic(input: &str) -> Result<Value, SchemeError> {
@@ -162,14 +139,14 @@ fn convert_jsonlogic_operation(
         }
         "!" => {
             let arg = normalize_unary_operands("!", operands)?;
-            Ok(Value::List(vec![Value::Symbol(jsonlogic_to_scheme("!").to_string()), arg]))
+            Ok(Value::List(vec![Value::Symbol(map_jsonlogic_id_to_scheme("!").to_string()), arg]))
         }
 
         // Comparison operators
         "==" => {
             let (first, second) = extract_binary_operands("==", operands)?;
             Ok(Value::List(vec![
-                Value::Symbol(jsonlogic_to_scheme("==").to_string()),
+                Value::Symbol(map_jsonlogic_id_to_scheme("==").to_string()),
                 first,
                 second,
             ]))
@@ -178,7 +155,7 @@ fn convert_jsonlogic_operation(
             let (first, second) = extract_binary_operands("!=", operands)?;
             Ok(Value::List(vec![
                 Value::Symbol("not".to_string()),
-                Value::List(vec![Value::Symbol(jsonlogic_to_scheme("==").to_string()), first, second]),
+                Value::List(vec![Value::Symbol(map_jsonlogic_id_to_scheme("==").to_string()), first, second]),
             ]))
         }
         ">" => {
@@ -315,7 +292,7 @@ fn value_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> 
                 let args = args?;
                 
                 // Convert Scheme operator names back to JSONLogic operators
-                let jsonlogic_op = scheme_to_jsonlogic(op);
+                let jsonlogic_op = map_scheme_id_to_jsonlogic(op);
                 
                 // Handle different argument patterns
                 match args.len() {
