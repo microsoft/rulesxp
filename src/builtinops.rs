@@ -78,8 +78,31 @@ pub enum OpKind {
     SpecialForm(fn(&[Value], &mut Environment) -> Result<Value, SchemeError>),
 }
 
+impl std::fmt::Debug for OpKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpKind::Function(_) => write!(f, "Function(<fn>)"),
+            OpKind::SpecialForm(_) => write!(f, "SpecialForm(<fn>)"),
+        }
+    }
+}
+
+impl PartialEq for OpKind {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (OpKind::Function(f1), OpKind::Function(f2)) => {
+                std::ptr::eq(f1 as *const _, f2 as *const _)
+            }
+            (OpKind::SpecialForm(f1), OpKind::SpecialForm(f2)) => {
+                std::ptr::eq(f1 as *const _, f2 as *const _)
+            }
+            _ => false,
+        }
+    }
+}
+
 /// Definition of a built-in operation
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BuiltinOp {
     /// The JSONLogic id (if different from Scheme id)
     pub jsonlogic_id: Option<&'static str>,

@@ -320,6 +320,9 @@ fn value_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> 
         Value::BuiltinFunction(_) => Err(SchemeError::EvalError(
             "Cannot convert builtin function to JSONLogic".to_string(),
         )),
+        Value::PrecompiledOp { .. } => Err(SchemeError::EvalError(
+            "Cannot convert precompiled operation to JSONLogic".to_string(),
+        )),
         Value::Function { .. } => Err(SchemeError::EvalError(
             "Cannot convert user function to JSONLogic".to_string(),
         )),

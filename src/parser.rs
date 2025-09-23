@@ -11,6 +11,14 @@ use nom::{
 
 use crate::SchemeError;
 use crate::ast::Value;
+use crate::builtinops::find_builtin_op_by_scheme_id;
+
+/// Control whether builtin operations should be precompiled during parsing
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShouldPrecompileOps {
+    Yes,
+    No,
+}
 
 /// Convert nom parsing errors to user-friendly messages
 fn parse_error_to_message(input: &str, error: nom::Err<Error<&str>>) -> String {
@@ -133,23 +141,68 @@ fn parse_string(input: &str) -> IResult<&str, Value> {
     )))
 }
 
-/// Parse quoted expression ('expr -> (quote expr))
-fn parse_quote(input: &str) -> IResult<&str, Value> {
-    let (input, _) = char('\'')(input)?;
-    let (input, expr) = parse_sexpr(input)?;
-    Ok((
-        input,
-        Value::List(vec![Value::Symbol("quote".to_string()), expr]),
-    ))
+
+
+/// Parse a list with configurable optimization behavior (performance optimized)
+fn parse_list(input: &str, optimize: ShouldPrecompileOps) -> IResult<&str, Value> {
+    // Parse opening parenthesis and whitespace
+    let (input, _) = char('(')(input)?;
+    let (input, _) = multispace0(input)?;
+    
+    // Early quote detection to avoid backtracking
+    let (input, is_quote) = opt(tag("quote"))(input)?;
+    
+    if is_quote.is_some() {
+        // Handle quote specially - parse exactly one more element unoptimized
+        let (input, _) = multispace1(input)?;
+        let (input, content) = parse_sexpr(input, ShouldPrecompileOps::No)?;
+        let (input, _) = multispace0(input)?;
+        let (input, _) = char(')')(input)?;
+        
+        return Ok((input, Value::List(vec![
+            Value::Symbol("quote".to_string()),
+            content
+        ])));
+    }
+    
+    // Regular list parsing - parse all elements in one pass
+    let (input, elements) = separated_list0(
+        multispace1, 
+        |input| parse_sexpr(input, optimize)
+    )(input)?;
+    
+    // Parse closing parenthesis and whitespace
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char(')')(input)?;
+    
+    // Apply optimization if enabled - single lookup, no repeated string comparison
+    if optimize == ShouldPrecompileOps::Yes && !elements.is_empty() {
+        if let Value::Symbol(op_name) = &elements[0] {
+            if let Some(builtin_op) = find_builtin_op_by_scheme_id(op_name.as_str()) {
+                let args = elements[1..].to_vec();
+                return Ok((input, Value::PrecompiledOp {
+                    op: builtin_op,
+                    op_name: op_name.clone(),
+                    args,
+                }));
+            }
+        }
+    }
+    
+    Ok((input, Value::List(elements)))
 }
 
-/// Parse an S-expression
-fn parse_sexpr(input: &str) -> IResult<&str, Value> {
+
+
+
+
+/// Parse an S-expression with configurable optimization behavior
+fn parse_sexpr(input: &str, optimize: ShouldPrecompileOps) -> IResult<&str, Value> {
     preceded(
         multispace0,
         alt((
-            parse_quote,
-            parse_list,
+            parse_quote, // Quote can still use normal parsing
+            |input| parse_list(input, optimize),
             parse_number,
             parse_bool,
             parse_string,
@@ -158,21 +211,21 @@ fn parse_sexpr(input: &str) -> IResult<&str, Value> {
     )(input)
 }
 
-/// Parse a list
-fn parse_list(input: &str) -> IResult<&str, Value> {
-    let (input, _) = char('(')(input)?;
-    let (input, _) = multispace0(input)?;
-    let (input, elements) = separated_list0(multispace1, parse_sexpr)(input)?;
-    let (input, _) = multispace0(input)?;
-    let (input, _) = char(')')(input).map_err(|_: nom::Err<Error<&str>>| {
-        nom::Err::Failure(Error::new(input, ErrorKind::Char))
-    })?;
-    Ok((input, Value::List(elements)))
+
+
+/// Parse quoted expression ('expr -> (quote expr))
+fn parse_quote(input: &str) -> IResult<&str, Value> {
+    let (input, _) = char('\'')(input)?;
+    let (input, expr) = parse_sexpr(input, ShouldPrecompileOps::No)?; // Use unoptimized parsing for quoted content
+    Ok((
+        input,
+        Value::List(vec![Value::Symbol("quote".to_string()), expr]),
+    ))
 }
 
-/// Parse a complete S-expression from input
+/// Parse a complete S-expression from input with optimization enabled
 pub fn parse(input: &str) -> Result<Value, SchemeError> {
-    match terminated(parse_sexpr, multispace0)(input) {
+    match terminated(|input| parse_sexpr(input, ShouldPrecompileOps::Yes), multispace0)(input) {
         Ok(("", value)) => Ok(value),
         Ok((remaining, _)) => Err(SchemeError::ParseError(format!(
             "Unexpected remaining input: '{}'",
@@ -380,17 +433,129 @@ mod tests {
 
     #[test]
     fn test_parse_list() {
+        // Empty list (nil)
+        assert_eq!(parse("()").unwrap(), Value::List(vec![]));
+
+        // Single element list
+        assert_eq!(
+            parse("(42)").unwrap(),
+            Value::List(vec![Value::Number(42)])
+        );
+
+        // Regular list with mixed types
+        assert_eq!(
+            parse("(1 hello \"world\" #t)").unwrap(),
+            Value::List(vec![
+                Value::Number(1),
+                Value::Symbol("hello".to_string()),
+                Value::String("world".to_string()),
+                Value::Bool(true)
+            ])
+        );
+
+        // Regular list (not a builtin operation)
         assert_eq!(
             parse("(1 2 3)").unwrap(),
             Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)])
         );
 
+        // Test that builtin operations are parsed as PrecompiledOp
+        match parse("(+ 1 2)").unwrap() {
+            Value::PrecompiledOp { op_name, args, .. } => {
+                assert_eq!(op_name, "+");
+                assert_eq!(args, vec![Value::Number(1), Value::Number(2)]);
+            }
+            other => panic!("Expected PrecompiledOp, got {:?}", other),
+        }
+
+        // Test multiple builtin operations
+        match parse("(* 3 4 5)").unwrap() {
+            Value::PrecompiledOp { op_name, args, .. } => {
+                assert_eq!(op_name, "*");
+                assert_eq!(args, vec![Value::Number(3), Value::Number(4), Value::Number(5)]);
+            }
+            other => panic!("Expected PrecompiledOp, got {:?}", other),
+        }
+
+        // Test builtin comparison operations
+        match parse("(< 1 2)").unwrap() {
+            Value::PrecompiledOp { op_name, args, .. } => {
+                assert_eq!(op_name, "<");
+                assert_eq!(args, vec![Value::Number(1), Value::Number(2)]);
+            }
+            other => panic!("Expected PrecompiledOp, got {:?}", other),
+        }
+
+        // Test builtin special forms
+        match parse("(if #t 1 2)").unwrap() {
+            Value::PrecompiledOp { op_name, args, .. } => {
+                assert_eq!(op_name, "if");
+                assert_eq!(args, vec![Value::Bool(true), Value::Number(1), Value::Number(2)]);
+            }
+            other => panic!("Expected PrecompiledOp, got {:?}", other),
+        }
+        
+        // Test that non-builtin symbols still create regular lists
         assert_eq!(
-            parse("(+ 1 2)").unwrap(),
+            parse("(foo 1 2)").unwrap(),
             Value::List(vec![
-                Value::Symbol("+".to_string()),
+                Value::Symbol("foo".to_string()),
                 Value::Number(1),
                 Value::Number(2)
+            ])
+        );
+
+        // Test that quote is NOT optimized (special case)
+        assert_eq!(
+            parse("(quote foo)").unwrap(),
+            Value::List(vec![
+                Value::Symbol("quote".to_string()),
+                Value::Symbol("foo".to_string())
+            ])
+        );
+
+        // Test nested lists with mixed builtins and regular lists
+        match parse("((+ 1 2) (foo bar))").unwrap() {
+            Value::List(elements) => {
+                assert_eq!(elements.len(), 2);
+                // First element should be PrecompiledOp
+                match &elements[0] {
+                    Value::PrecompiledOp { op_name, args, .. } => {
+                        assert_eq!(op_name, "+");
+                        assert_eq!(args, &vec![Value::Number(1), Value::Number(2)]);
+                    }
+                    other => panic!("Expected PrecompiledOp, got {:?}", other),
+                }
+                // Second element should be regular list
+                assert_eq!(
+                    elements[1],
+                    Value::List(vec![
+                        Value::Symbol("foo".to_string()),
+                        Value::Symbol("bar".to_string())
+                    ])
+                );
+            }
+            other => panic!("Expected List, got {:?}", other),
+        }
+
+        // Test list with only symbols (should remain a list)
+        assert_eq!(
+            parse("(a b c)").unwrap(),
+            Value::List(vec![
+                Value::Symbol("a".to_string()),
+                Value::Symbol("b".to_string()),
+                Value::Symbol("c".to_string())
+            ])
+        );
+
+        // Test list starting with number (should remain a list)
+        assert_eq!(
+            parse("(42 is the answer)").unwrap(),
+            Value::List(vec![
+                Value::Number(42),
+                Value::Symbol("is".to_string()),
+                Value::Symbol("the".to_string()),
+                Value::Symbol("answer".to_string())
             ])
         );
     }
@@ -445,6 +610,30 @@ mod tests {
         // Multiple expressions (should fail for main parse function)
         assert!(parse("1 2").is_err());
         assert!(parse("(+ 1 2) (+ 3 4)").is_err());
+    }
+
+    #[test]
+    fn test_display_round_trip() {
+        // Test that PrecompiledOp displays in a form that can be parsed again
+        let original = "(+ 1 2 3)";
+        let parsed = parse(original).unwrap();
+        let displayed = format!("{}", parsed);
+        
+        // Should be able to parse the displayed form
+        let reparsed = parse(&displayed).unwrap();
+        let redisplayed = format!("{}", reparsed);
+        
+        // Should be consistent
+        assert_eq!(displayed, redisplayed);
+        
+        // Test nested operations
+        let nested = "(+ (* 2 3) (- 10 5))";
+        let parsed_nested = parse(nested).unwrap();
+        let displayed_nested = format!("{}", parsed_nested);
+        let reparsed_nested = parse(&displayed_nested).unwrap();
+        let redisplayed_nested = format!("{}", reparsed_nested);
+        
+        assert_eq!(displayed_nested, redisplayed_nested);
     }
 
     #[test]

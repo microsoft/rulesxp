@@ -56,6 +56,23 @@ pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
             .cloned()
             .ok_or_else(|| SchemeError::UnboundVariable(name.clone())),
 
+        // PrecompiledOp evaluation (optimized path for builtin operations and special forms)
+        Value::PrecompiledOp { op, args, .. } => {
+            use crate::builtinops::OpKind;
+            match &op.op_kind {
+                OpKind::Function(f) => {
+                    // Evaluate all arguments using helper function
+                    let evaluated_args = eval_args(args, env)?;
+                    // Apply the function
+                    f(&evaluated_args)
+                }
+                OpKind::SpecialForm(special_form) => {
+                    // Special forms get unevaluated arguments
+                    special_form(args, env)
+                }
+            }
+        }
+
         // List evaluation (function application or special forms)
         Value::List(elements) => eval_list(elements, env).map_err(|err| add_context(err, expr)),
     }
@@ -117,7 +134,7 @@ fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeE
 /// Evaluate quote special form
 pub fn eval_quote(args: &[Value], _env: &mut Environment) -> Result<Value, SchemeError> {
     match args {
-        [expr] => Ok(expr.clone()),
+        [expr] => Ok(expr.clone()), // Quote content is already unoptimized during parsing
         _ => Err(SchemeError::ArityError {
             expected: 1,
             got: args.len(),
@@ -296,6 +313,18 @@ fn apply_function(
 ) -> Result<Value, SchemeError> {
     match func {
         Value::BuiltinFunction(f) => f(args),
+        Value::PrecompiledOp { op, args: _op_args, .. } => {
+            // For PrecompiledOp, the arguments are already parsed and stored
+            // We need to evaluate them and then apply the operation
+            use crate::builtinops::OpKind;
+            match &op.op_kind {
+                OpKind::Function(f) => f(args),
+                OpKind::SpecialForm(_) => {
+                    // Special forms should be handled in eval_list, not here
+                    Err(SchemeError::EvalError("Special forms should not reach apply_function".to_string()))
+                }
+            }
+        }
         Value::Function {
             params,
             body,
@@ -341,6 +370,7 @@ pub fn create_global_env() -> Environment {
     // Add all regular functions from the registry
     for (&scheme_id, builtin_op) in &BUILTIN_OPS {
         if let crate::builtinops::OpKind::Function(func) = &builtin_op.op_kind {
+            // Use BuiltinFunction for environment bindings (dynamic calls through symbols)
             env.define(scheme_id.to_string(), Value::BuiltinFunction(*func));
         }
     }
