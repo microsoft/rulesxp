@@ -44,7 +44,7 @@ fn main() {
                             println!("  • Scheme inputs show JSONLogic translation (→)");
                         } else {
                             println!("Scheme mode enabled:");
-                            println!("  • Results shown as S-expressions"); 
+                            println!("  • Results shown as S-expressions");
                             println!("  • JSONLogic inputs show Scheme translation (→)");
                         }
                         continue;
@@ -122,7 +122,9 @@ fn print_help() {
     println!("  :help      - Show this help message");
     println!("  :env       - Show current environment bindings");
     println!("  :jsonlogic - Toggle JSONLogic output mode");
-    println!("               • Scheme mode: results as S-expressions, shows JSONLogic translation (→)");
+    println!(
+        "               • Scheme mode: results as S-expressions, shows JSONLogic translation (→)"
+    );
     println!("               • JSONLogic mode: results as JSONLogic, shows Scheme translation (→)");
     println!("  :quit      - Exit the interpreter");
     println!("  :exit      - Exit the interpreter");

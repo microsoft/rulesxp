@@ -1,8 +1,6 @@
-use crate::ast::Value;
 use crate::SchemeError;
-use crate::builtinops::{
-    find_builtin_op_by_scheme_id, BUILTIN_OPS,
-};
+use crate::ast::Value;
+use crate::builtinops::{BUILTIN_OPS, find_builtin_op_by_scheme_id};
 use std::collections::HashMap;
 
 /// Environment for variable bindings
@@ -111,7 +109,7 @@ fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeE
                 // Not a builtin, treat as normal function application
                 eval_application(elements, env)
             }
-        },
+        }
         _ => eval_application(elements, env),
     }
 }
@@ -148,28 +146,20 @@ pub fn eval_define(args: &[Value], env: &mut Environment) -> Result<Value, Schem
 /// Evaluate if special form
 pub fn eval_if(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
     match args {
-        [condition_expr, then_expr] => {
-            let condition = eval(condition_expr, env)?;
-            match condition {
-                Value::Bool(true) => eval(then_expr, env),
-                Value::Bool(false) => Ok(Value::List(vec![])), // Return nil when no else clause
-                _ => Err(SchemeError::TypeError(
-                    "if condition must be a boolean".to_string(),
-                )),
-            }
-        }
         [condition_expr, then_expr, else_expr] => {
             let condition = eval(condition_expr, env)?;
             match condition {
                 Value::Bool(true) => eval(then_expr, env),
                 Value::Bool(false) => eval(else_expr, env),
                 _ => Err(SchemeError::TypeError(
-                    "if condition must be a boolean".to_string(),
+                    "SCHEME-JSONLOGIC-STRICT: if condition must be a boolean".to_string(),
                 )),
             }
         }
         _ => Err(SchemeError::ArityError {
-            expected: 2,
+            // SCHEME-JSONLOGIC-STRICT: Require exactly 3 arguments
+            // (Scheme allows 2 args with undefined behavior, JSONLogic allows chaining with >3 args)
+            expected: 3,
             got: args.len(),
         }),
     }
@@ -182,7 +172,16 @@ pub fn eval_lambda(args: &[Value], env: &mut Environment) -> Result<Value, Schem
             let mut params = Vec::new();
             for param in param_list {
                 match param {
-                    Value::Symbol(name) => params.push(name.clone()),
+                    Value::Symbol(name) => {
+                        // Check for duplicate parameter names (R7RS compliant)
+                        if params.contains(name) {
+                            return Err(SchemeError::EvalError(format!(
+                                "Duplicate parameter name: {}",
+                                name
+                            )));
+                        }
+                        params.push(name.clone());
+                    }
                     _ => {
                         return Err(SchemeError::TypeError(
                             "Lambda parameters must be symbols".to_string(),
@@ -190,6 +189,12 @@ pub fn eval_lambda(args: &[Value], env: &mut Environment) -> Result<Value, Schem
                     }
                 }
             }
+
+            // SCHEME-STRICT: We do not support Scheme's variadic lambda forms:
+            // - (lambda args body) - where args is a symbol that collects all arguments as a list
+            // - (lambda (a b . rest) body) - where rest collects remaining arguments (dot notation)
+            // Our implementation only supports fixed-arity lambdas with explicit parameter lists.
+
             Ok(Value::Function {
                 params,
                 body: Box::new(body.clone()),
@@ -208,9 +213,12 @@ pub fn eval_lambda(args: &[Value], env: &mut Environment) -> Result<Value, Schem
 
 /// Evaluate and special form (strict boolean evaluation)
 pub fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
-    // (and) returns #t
+    // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
     if args.is_empty() {
-        return Ok(Value::Bool(true));
+        return Err(SchemeError::ArityError {
+            expected: 1,
+            got: 0,
+        });
     }
 
     // Evaluate each argument and require it to be a boolean
@@ -222,7 +230,7 @@ pub fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeEr
             Value::Bool(true) => continue,
             _ => {
                 return Err(SchemeError::TypeError(
-                    "and requires boolean arguments".to_string(),
+                    "SCHEME-JSONLOGIC-STRICT: and requires boolean arguments".to_string(),
                 ));
             }
         }
@@ -234,9 +242,12 @@ pub fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeEr
 
 /// Evaluate or special form (strict boolean evaluation)
 pub fn eval_or(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
-    // (or) returns #f
+    // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #f)
     if args.is_empty() {
-        return Ok(Value::Bool(false));
+        return Err(SchemeError::ArityError {
+            expected: 1,
+            got: 0,
+        });
     }
 
     // Evaluate each argument and require it to be a boolean
@@ -248,7 +259,7 @@ pub fn eval_or(args: &[Value], env: &mut Environment) -> Result<Value, SchemeErr
             Value::Bool(false) => continue,
             _ => {
                 return Err(SchemeError::TypeError(
-                    "or requires boolean arguments".to_string(),
+                    "SCHEME-JSONLOGIC-STRICT: or requires boolean arguments".to_string(),
                 ));
             }
         }
@@ -448,11 +459,14 @@ mod tests {
 
     #[test]
     fn test_if() {
-        // Test if with boolean conditions
+        // Test if with boolean conditions - now requires exactly 3 arguments
         assert_eq!(eval_string("(if #t 1 2)").unwrap(), Value::Number(1));
         assert_eq!(eval_string("(if #f 1 2)").unwrap(), Value::Number(2));
-        assert_eq!(eval_string("(if #t 1)").unwrap(), Value::Number(1));
-        assert_eq!(eval_string("(if #f 1)").unwrap(), Value::List(vec![])); // Empty list (nil)
+
+        // SCHEME-JSONLOGIC-STRICT: Require exactly 3 arguments
+        // (Scheme allows 2 args with undefined behavior, JSONLogic allows chaining with >3 args)
+        assert!(eval_string("(if #t 1)").is_err()); // Too few arguments
+        assert!(eval_string("(if #f 1)").is_err()); // Too few arguments
 
         // Test that if rejects non-boolean conditions
         assert!(eval_string("(if 0 1 2)").is_err()); // should error with non-boolean
@@ -477,7 +491,8 @@ mod tests {
     #[test]
     fn test_logic_operators() {
         // Test 'and' operator - now requires boolean arguments
-        assert_eq!(eval_string("(and)").unwrap(), Value::Bool(true));
+        // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
+        assert!(eval_string("(and)").is_err());
         assert_eq!(eval_string("(and #t)").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(and #f)").unwrap(), Value::Bool(false));
         assert_eq!(eval_string("(and #t #t)").unwrap(), Value::Bool(true));
@@ -489,7 +504,8 @@ mod tests {
         assert!(eval_string("(and 1 #f 3)").is_err()); // should error with non-booleans
 
         // Test 'or' operator - now requires boolean arguments
-        assert_eq!(eval_string("(or)").unwrap(), Value::Bool(false));
+        // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #f)
+        assert!(eval_string("(or)").is_err());
         assert_eq!(eval_string("(or #t)").unwrap(), Value::Bool(true));
         assert_eq!(eval_string("(or #f)").unwrap(), Value::Bool(false));
         assert_eq!(eval_string("(or #t #f)").unwrap(), Value::Bool(true));

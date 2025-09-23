@@ -5,7 +5,7 @@ use sexpr::parser::parse as parse_scheme;
 fn main() {
     println!("=== Dual-Language Scheme/JSONLogic Demo ===\n");
 
-    let mut env = evaluator::create_global_env();
+    let env = evaluator::create_global_env();
 
     // Test cases comparing equivalent expressions
     let test_cases = vec![

@@ -1,7 +1,7 @@
 //! S-expression interpreter with dual Scheme and JSONLogic support.
-//! 
-//! This crate provides a minimalistic expression evaluator that supports both Scheme syntax 
-//! and JSONLogic operations. It implements a proper subset of both languages with stronger 
+//!
+//! This crate provides a minimalistic expression evaluator that supports both Scheme syntax
+//! and JSONLogic operations. It implements a proper subset of both languages with stronger
 //! typing guarantees than either parent language.
 //!
 //! ## Dual Language Support
@@ -86,13 +86,12 @@ pub mod parser;
 pub use ast::Value;
 pub use parser::parse;
 
-// Evaluation engine  
-pub use evaluator::{eval, Environment, create_global_env};
+// Evaluation engine
+pub use evaluator::{Environment, create_global_env, eval};
 
 // Built-in operations with dual-language support
 pub use builtinops::{
-    map_jsonlogic_id_to_scheme, map_scheme_id_to_jsonlogic,
-    BUILTIN_OPS, BUILTIN_OPS_JSONLOGIC
+    BUILTIN_OPS, BUILTIN_OPS_JSONLOGIC, map_jsonlogic_id_to_scheme, map_scheme_id_to_jsonlogic,
 };
 
 // JSONLogic integration

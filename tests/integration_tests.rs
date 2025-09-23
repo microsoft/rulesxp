@@ -1,7 +1,7 @@
+use sexpr::SchemeError;
 use sexpr::ast::Value;
 use sexpr::evaluator::{self, Environment};
 use sexpr::parser;
-use sexpr::SchemeError;
 
 /// Helper function to parse and evaluate a string expression
 fn eval_string(input: &str, env: &mut Environment) -> Result<Value, SchemeError> {
@@ -165,11 +165,12 @@ fn test_define_and_variables() {
 
 #[test]
 fn test_if_expressions() {
-    // Test if with boolean conditions
+    // Test if with boolean conditions - now requires exactly 3 arguments
     assert_eq!(eval_fresh("(if #t 1 2)").unwrap(), Value::Number(1));
     assert_eq!(eval_fresh("(if #f 1 2)").unwrap(), Value::Number(2));
-    assert_eq!(eval_fresh("(if #t 1)").unwrap(), Value::Number(1));
-    assert_eq!(eval_fresh("(if #f 1)").unwrap(), Value::List(vec![])); // Empty list (nil)
+
+    assert!(eval_fresh("(if #t 1)").is_err()); // Too few arguments
+    assert!(eval_fresh("(if #f 1)").is_err()); // Too few arguments
 
     // Test with boolean expressions (these return booleans)
     assert_eq!(
@@ -212,6 +213,18 @@ fn test_lambda_and_function_calls() {
         eval_string("(get-answer)", &mut env).unwrap(),
         Value::Number(42)
     );
+
+    // Test error cases for lambda
+    // Duplicate parameter names should be rejected
+    assert!(eval_string("(lambda (x x) (+ x x))", &mut env).is_err());
+    assert!(eval_string("(lambda (a b a) (* a b))", &mut env).is_err());
+
+    // Variadic lambda forms should be rejected (we only support fixed-arity)
+    assert!(eval_string("(lambda args (+ 1 2))", &mut env).is_err()); // Symbol parameter list
+
+    // Non-symbol parameters should be rejected
+    assert!(eval_string("(lambda (1 2) (+ 1 2))", &mut env).is_err());
+    assert!(eval_string("(lambda (\"x\" y) (+ x y))", &mut env).is_err());
 }
 
 #[test]
@@ -407,7 +420,8 @@ fn test_self_evaluating_forms() {
 #[test]
 fn test_logic_operators() {
     // Test 'and' with boolean inputs only
-    assert_eq!(eval_fresh("(and)").unwrap(), Value::Bool(true));
+    // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
+    assert!(eval_fresh("(and)").is_err());
     assert_eq!(eval_fresh("(and #t)").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("(and #f)").unwrap(), Value::Bool(false));
     assert_eq!(eval_fresh("(and #t #t #t)").unwrap(), Value::Bool(true));
@@ -419,7 +433,8 @@ fn test_logic_operators() {
     assert!(eval_fresh("(and \"hello\" 42)").is_err()); // should error with non-booleans
 
     // Test 'or' with boolean inputs only
-    assert_eq!(eval_fresh("(or)").unwrap(), Value::Bool(false));
+    // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #f)
+    assert!(eval_fresh("(or)").is_err());
     assert_eq!(eval_fresh("(or #t)").unwrap(), Value::Bool(true));
     assert_eq!(eval_fresh("(or #f)").unwrap(), Value::Bool(false));
     assert_eq!(eval_fresh("(or #f #f #t)").unwrap(), Value::Bool(true));
@@ -557,8 +572,8 @@ fn test_unified_nil_representation() {
         ])
     );
 
-    // Test if returning nil when no else clause
-    let if_result = eval_string("(if #f 42)", &mut env).unwrap();
+    // Test nil behavior
+    let if_result = eval_string("(if #f 42 '())", &mut env).unwrap();
     assert_eq!(if_result, Value::List(vec![]));
     assert!(if_result.is_nil());
 
@@ -588,7 +603,7 @@ fn test_unified_nil_representation() {
         eval_string("'()", &mut env).unwrap(),
         eval_string("(quote ())", &mut env).unwrap(),
         eval_string("(list)", &mut env).unwrap(),
-        eval_string("(if #f 1)", &mut env).unwrap(),
+        eval_string("(if #f '() '())", &mut env).unwrap(),
     ];
 
     for nil_val in various_nils {

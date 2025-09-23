@@ -1,5 +1,5 @@
-use crate::ast::Value;
 use crate::SchemeError;
+use crate::ast::Value;
 use crate::builtinops::{map_jsonlogic_id_to_scheme, map_scheme_id_to_jsonlogic};
 use serde_json;
 
@@ -139,7 +139,10 @@ fn convert_jsonlogic_operation(
         }
         "!" => {
             let arg = normalize_unary_operands("!", operands)?;
-            Ok(Value::List(vec![Value::Symbol(map_jsonlogic_id_to_scheme("!").to_string()), arg]))
+            Ok(Value::List(vec![
+                Value::Symbol(map_jsonlogic_id_to_scheme("!").to_string()),
+                arg,
+            ]))
         }
 
         // Comparison operators
@@ -155,7 +158,11 @@ fn convert_jsonlogic_operation(
             let (first, second) = extract_binary_operands("!=", operands)?;
             Ok(Value::List(vec![
                 Value::Symbol("not".to_string()),
-                Value::List(vec![Value::Symbol(map_jsonlogic_id_to_scheme("==").to_string()), first, second]),
+                Value::List(vec![
+                    Value::Symbol(map_jsonlogic_id_to_scheme("==").to_string()),
+                    first,
+                    second,
+                ]),
             ]))
         }
         ">" => {
@@ -285,18 +292,19 @@ fn value_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> 
         Value::List(list) => {
             // Check if this is a function call (first element is a symbol)
             if let Some(Value::Symbol(op)) = list.first() {
-                let args: Result<Vec<serde_json::Value>, SchemeError> = list[1..]
-                    .iter()
-                    .map(value_to_json_value)
-                    .collect();
+                let args: Result<Vec<serde_json::Value>, SchemeError> =
+                    list[1..].iter().map(value_to_json_value).collect();
                 let args = args?;
-                
+
                 // Convert Scheme operator names back to JSONLogic operators
                 let jsonlogic_op = map_scheme_id_to_jsonlogic(op);
-                
+
                 // Handle different argument patterns
                 match args.len() {
-                    0 => Err(SchemeError::EvalError(format!("Operation {} requires arguments", op))),
+                    0 => Err(SchemeError::EvalError(format!(
+                        "Operation {} requires arguments",
+                        op
+                    ))),
                     _ => {
                         // Always use array format for all operations
                         Ok(serde_json::json!({jsonlogic_op: args}))
@@ -304,10 +312,8 @@ fn value_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> 
                 }
             } else {
                 // Convert list elements
-                let converted: Result<Vec<serde_json::Value>, SchemeError> = list
-                    .iter()
-                    .map(value_to_json_value)
-                    .collect();
+                let converted: Result<Vec<serde_json::Value>, SchemeError> =
+                    list.iter().map(value_to_json_value).collect();
                 Ok(serde_json::Value::Array(converted?))
             }
         }
@@ -454,31 +460,37 @@ mod tests {
         assert_eq!(value_to_jsonlogic(&Value::Bool(true)).unwrap(), "true");
         assert_eq!(value_to_jsonlogic(&Value::Bool(false)).unwrap(), "false");
         assert_eq!(value_to_jsonlogic(&Value::Number(42)).unwrap(), "42");
-        assert_eq!(value_to_jsonlogic(&Value::String("hello".to_string())).unwrap(), "\"hello\"");
-        
+        assert_eq!(
+            value_to_jsonlogic(&Value::String("hello".to_string())).unwrap(),
+            "\"hello\""
+        );
+
         // Test symbols (converted to var operations)
-        assert_eq!(value_to_jsonlogic(&Value::Symbol("age".to_string())).unwrap(), r#"{"var":"age"}"#);
-        
+        assert_eq!(
+            value_to_jsonlogic(&Value::Symbol("age".to_string())).unwrap(),
+            r#"{"var":"age"}"#
+        );
+
         // Test simple operations
         let and_op = Value::List(vec![
             Value::Symbol("and".to_string()),
             Value::Bool(true),
-            Value::Bool(false)
+            Value::Bool(false),
         ]);
-        assert_eq!(value_to_jsonlogic(&and_op).unwrap(), r#"{"and":[true,false]}"#);
-        
+        assert_eq!(
+            value_to_jsonlogic(&and_op).unwrap(),
+            r#"{"and":[true,false]}"#
+        );
+
         // Test unary operation (always uses array format)
-        let not_op = Value::List(vec![
-            Value::Symbol("not".to_string()),
-            Value::Bool(true)
-        ]);
+        let not_op = Value::List(vec![Value::Symbol("not".to_string()), Value::Bool(true)]);
         assert_eq!(value_to_jsonlogic(&not_op).unwrap(), r#"{"!":[true]}"#);
-        
-        // Test equality operation  
+
+        // Test equality operation
         let eq_op = Value::List(vec![
             Value::Symbol("equal?".to_string()),
             Value::Number(1),
-            Value::Number(2)
+            Value::Number(2),
         ]);
         assert_eq!(value_to_jsonlogic(&eq_op).unwrap(), r#"{"==":[1,2]}"#);
     }

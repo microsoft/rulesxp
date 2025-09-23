@@ -6,11 +6,11 @@ use nom::{
     combinator::{map, opt, recognize, value},
     error::{Error, ErrorKind},
     multi::separated_list0,
-    sequence::{delimited, pair, preceded, terminated},
+    sequence::{pair, preceded, terminated},
 };
 
-use crate::ast::Value;
 use crate::SchemeError;
+use crate::ast::Value;
 
 /// Convert nom parsing errors to user-friendly messages
 fn parse_error_to_message(input: &str, error: nom::Err<Error<&str>>) -> String {
@@ -18,15 +18,6 @@ fn parse_error_to_message(input: &str, error: nom::Err<Error<&str>>) -> String {
         nom::Err::Error(e) | nom::Err::Failure(e) => {
             let position = input.len().saturating_sub(e.input.len());
             match e.code {
-                ErrorKind::TakeWhile1 => {
-                    if input.trim_start().starts_with('(') && !input.contains(')') {
-                        "Missing closing parenthesis".to_string()
-                    } else if input.trim_start().starts_with(')') {
-                        "Unexpected closing parenthesis".to_string()
-                    } else {
-                        format!("Invalid character at position {}", position)
-                    }
-                }
                 ErrorKind::Char => format!("Expected character at position {}", position),
                 ErrorKind::Tag => format!("Unexpected token at position {}", position),
                 _ => {
@@ -169,14 +160,14 @@ fn parse_sexpr(input: &str) -> IResult<&str, Value> {
 
 /// Parse a list
 fn parse_list(input: &str) -> IResult<&str, Value> {
-    delimited(
-        char('('),
-        map(
-            preceded(multispace0, separated_list0(multispace1, parse_sexpr)),
-            Value::List,
-        ),
-        preceded(multispace0, char(')')),
-    )(input)
+    let (input, _) = char('(')(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, elements) = separated_list0(multispace1, parse_sexpr)(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char(')')(input).map_err(|_: nom::Err<Error<&str>>| {
+        nom::Err::Failure(Error::new(input, ErrorKind::Char))
+    })?;
+    Ok((input, Value::List(elements)))
 }
 
 /// Parse a complete S-expression from input
