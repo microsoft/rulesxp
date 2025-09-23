@@ -335,10 +335,11 @@ fn test_error_cases() {
     }
 
     match eval_fresh("(car)") {
-        Err(SchemeError::ArityError {
-            expected: 1,
-            got: 0,
-        }) => (),
+        Err(SchemeError::ArityError { expected, got, expression }) => {
+            assert_eq!(expected, 1);
+            assert_eq!(got, 0);
+            assert_eq!(expression.as_deref(), Some("(car)"));
+        }
         _ => panic!("Expected arity error for car with no arguments"),
     }
 
@@ -491,18 +492,20 @@ fn test_logic_operators() {
 
     // Test error cases
     match eval_fresh("(not)") {
-        Err(SchemeError::ArityError {
-            expected: 1,
-            got: 0,
-        }) => (),
+        Err(SchemeError::ArityError { expected, got, expression }) => {
+            assert_eq!(expected, 1);
+            assert_eq!(got, 0);
+            assert_eq!(expression.as_deref(), Some("(not)"));
+        }
         _ => panic!("Expected arity error for not with no arguments"),
     }
 
     match eval_fresh("(not 1 2)") {
-        Err(SchemeError::ArityError {
-            expected: 1,
-            got: 2,
-        }) => (),
+        Err(SchemeError::ArityError { expected, got, expression }) => {
+            assert_eq!(expected, 1);
+            assert_eq!(got, 2);
+            assert_eq!(expression.as_deref(), Some("(not 1 2)"));
+        }
         _ => panic!("Expected arity error for not with too many arguments"),
     }
 }

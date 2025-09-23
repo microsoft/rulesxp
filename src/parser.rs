@@ -226,13 +226,52 @@ fn parse_quote(input: &str) -> IResult<&str, Value> {
 /// Parse a complete S-expression from input with optimization enabled
 pub fn parse(input: &str) -> Result<Value, SchemeError> {
     match terminated(|input| parse_sexpr(input, ShouldPrecompileOps::Yes), multispace0)(input) {
-        Ok(("", value)) => Ok(value),
+        Ok(("", value)) => {
+            // After successful parsing, validate arity for any PrecompiledOp
+            validate_arity_in_ast(&value)?;
+            Ok(value)
+        }
         Ok((remaining, _)) => Err(SchemeError::ParseError(format!(
             "Unexpected remaining input: '{}'",
             remaining
         ))),
         Err(e) => Err(SchemeError::ParseError(parse_error_to_message(input, e))),
     }
+}
+
+/// Recursively validate arity in parsed AST - simpler than threading through parser
+fn validate_arity_in_ast(value: &Value) -> Result<(), SchemeError> {
+    match value {
+        Value::PrecompiledOp { op, args, .. } => {
+            // Validate this operation's arity with enhanced error message
+            if op.validate_arity(args.len()).is_err() {
+                // Get the failing expression in readable form
+                let failing_expr = value.to_uncompiled_form();
+                
+                // Enhanced error message with expression context
+                let base_error = op.validate_arity(args.len()).unwrap_err();
+                if let SchemeError::ArityError { expected, got, .. } = base_error {
+                    return Err(SchemeError::arity_error_with_expr(
+                        expected, 
+                        got, 
+                        format!("{}", failing_expr)
+                    ));
+                }
+            }
+            // Recursively validate nested expressions
+            for arg in args {
+                validate_arity_in_ast(arg)?;
+            }
+        }
+        Value::List(elements) => {
+            // Recursively validate list elements
+            for element in elements {
+                validate_arity_in_ast(element)?;
+            }
+        }
+        _ => {} // Other value types don't need validation
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -610,6 +649,59 @@ mod tests {
         // Multiple expressions (should fail for main parse function)
         assert!(parse("1 2").is_err());
         assert!(parse("(+ 1 2) (+ 3 4)").is_err());
+    }
+
+    #[test]
+    fn test_arity_errors_at_parse_time() {
+        // Test that arity errors are caught during parsing, not evaluation
+        
+        // Test 'not' with no arguments (expects exactly 1)
+        match parse("(not)") {
+            Err(SchemeError::ArityError { expected, got, expression }) => {
+                assert_eq!(expected, 1);
+                assert_eq!(got, 0);
+                assert_eq!(expression.as_deref(), Some("(not)"));
+            }
+            other => panic!("Expected arity error for (not), got {:?}", other),
+        }
+        
+        // Test 'not' with too many arguments (expects exactly 1)
+        match parse("(not #t #f)") {
+            Err(SchemeError::ArityError { expected, got, expression }) => {
+                assert_eq!(expected, 1);
+                assert_eq!(got, 2);
+                assert_eq!(expression.as_deref(), Some("(not #t #f)"));
+            }
+            other => panic!("Expected arity error for (not #t #f), got {:?}", other),
+        }
+        
+        // Test 'car' with no arguments (expects exactly 1)
+        match parse("(car)") {
+            Err(SchemeError::ArityError { expected, got, expression }) => {
+                assert_eq!(expected, 1);
+                assert_eq!(got, 0);
+                assert_eq!(expression.as_deref(), Some("(car)"));
+            }
+            other => panic!("Expected arity error for (car), got {:?}", other),
+        }
+        
+        // Test '+' with valid arity (should succeed)
+        assert!(parse("(+ 1 2)").is_ok());
+        
+        // Test nested arity errors are also caught
+        match parse("(list (not) 42)") {
+            Err(SchemeError::ArityError { expected, got, expression }) => {
+                assert_eq!(expected, 1);
+                assert_eq!(got, 0);
+                assert_eq!(expression.as_deref(), Some("(not)"));
+            }
+            other => panic!("Expected arity error for nested (not), got {:?}", other),
+        }
+        
+        // Test that valid expressions still parse successfully
+        assert!(parse("(not #t)").is_ok());
+        assert!(parse("(car (list 1 2 3))").is_ok());
+        assert!(parse("(+ 1 2 3 4 5)").is_ok());
     }
 
     #[test]

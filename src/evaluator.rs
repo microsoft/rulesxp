@@ -57,17 +57,18 @@ pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
             .ok_or_else(|| SchemeError::UnboundVariable(name.clone())),
 
         // PrecompiledOp evaluation (optimized path for builtin operations and special forms)
+        // Note: Arity is already validated at parse time, so no runtime checking needed
         Value::PrecompiledOp { op, args, .. } => {
             use crate::builtinops::OpKind;
             match &op.op_kind {
                 OpKind::Function(f) => {
                     // Evaluate all arguments using helper function
                     let evaluated_args = eval_args(args, env)?;
-                    // Apply the function
+                    // Apply the function (arity already validated at parse time)
                     f(&evaluated_args)
                 }
                 OpKind::SpecialForm(special_form) => {
-                    // Special forms get unevaluated arguments
+                    // Special forms get unevaluated arguments (arity already validated at parse time)
                     special_form(args, env)
                 }
             }
@@ -109,16 +110,18 @@ fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeE
         )),
 
         // Check if first element is a symbol that might be a builtin operation
+        // Note: Dynamic calls (not PrecompiledOps) still need runtime arity checking
         [Value::Symbol(name), args @ ..] => {
             if let Some(builtin_op) = find_builtin_op_by_scheme_id(name) {
                 match &builtin_op.op_kind {
                     crate::builtinops::OpKind::SpecialForm(special_form) => {
-                        // Call the special form function directly
+                        // Call the special form function directly (with runtime arity checking)
                         special_form(args, env)
                     }
                     crate::builtinops::OpKind::Function(builtin_func) => {
                         // Evaluate arguments and call the builtin function directly
                         let evaluated_args = eval_args(args, env)?;
+                        // Note: Individual builtin functions still validate their own arity
                         builtin_func(&evaluated_args)
                     }
                 }
@@ -135,10 +138,7 @@ fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeE
 pub fn eval_quote(args: &[Value], _env: &mut Environment) -> Result<Value, SchemeError> {
     match args {
         [expr] => Ok(expr.clone()), // Quote content is already unoptimized during parsing
-        _ => Err(SchemeError::ArityError {
-            expected: 1,
-            got: args.len(),
-        }),
+        _ => Err(SchemeError::arity_error(1, args.len())),
     }
 }
 
@@ -153,10 +153,7 @@ pub fn eval_define(args: &[Value], env: &mut Environment) -> Result<Value, Schem
         [_, _] => Err(SchemeError::TypeError(
             "define requires a symbol".to_string(),
         )),
-        _ => Err(SchemeError::ArityError {
-            expected: 2,
-            got: args.len(),
-        }),
+        _ => Err(SchemeError::arity_error(2, args.len())),
     }
 }
 
@@ -173,12 +170,7 @@ pub fn eval_if(args: &[Value], env: &mut Environment) -> Result<Value, SchemeErr
                 )),
             }
         }
-        _ => Err(SchemeError::ArityError {
-            // SCHEME-JSONLOGIC-STRICT: Require exactly 3 arguments
-            // (Scheme allows 2 args with undefined behavior, JSONLogic allows chaining with >3 args)
-            expected: 3,
-            got: args.len(),
-        }),
+        _ => Err(SchemeError::arity_error(3, args.len())),
     }
 }
 
@@ -221,10 +213,7 @@ pub fn eval_lambda(args: &[Value], env: &mut Environment) -> Result<Value, Schem
         [_, _] => Err(SchemeError::TypeError(
             "Lambda parameters must be a list".to_string(),
         )),
-        _ => Err(SchemeError::ArityError {
-            expected: 2,
-            got: args.len(),
-        }),
+        _ => Err(SchemeError::arity_error(2, args.len())),
     }
 }
 
@@ -232,10 +221,7 @@ pub fn eval_lambda(args: &[Value], env: &mut Environment) -> Result<Value, Schem
 pub fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
     // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
     if args.is_empty() {
-        return Err(SchemeError::ArityError {
-            expected: 1,
-            got: 0,
-        });
+        return Err(SchemeError::arity_error(1, 0));
     }
 
     // Evaluate each argument and require it to be a boolean
@@ -261,10 +247,7 @@ pub fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeEr
 pub fn eval_or(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
     // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #f)
     if args.is_empty() {
-        return Err(SchemeError::ArityError {
-            expected: 1,
-            got: 0,
-        });
+        return Err(SchemeError::arity_error(1, 0));
     }
 
     // Evaluate each argument and require it to be a boolean
@@ -331,10 +314,7 @@ fn apply_function(
             env: closure_env,
         } => {
             if params.len() != args.len() {
-                return Err(SchemeError::ArityError {
-                    expected: params.len(),
-                    got: args.len(),
-                });
+                return Err(SchemeError::arity_error(params.len(), args.len()));
             }
 
             // Create new environment with closure environment as parent

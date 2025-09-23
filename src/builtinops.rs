@@ -138,6 +138,7 @@ impl BuiltinOp {
                     Arity::Any => 0,
                 },
                 got: arg_count,
+                expression: None,  // Builtin validation doesn't have expression context
             })
         }
     }
@@ -153,7 +154,7 @@ macro_rules! numeric_comparison {
         pub fn $name(args: &[Value]) -> Result<Value, SchemeError> {
             // SCHEME-JSONLOGIC-STRICT: Require at least 2 arguments (both standards allow < 2 args but with different semantics)
             if args.len() < 2 {
-                return Err(SchemeError::ArityError { expected: 2, got: args.len() });
+                return Err(SchemeError::arity_error(2, args.len()));
             }
 
             // Chain comparisons: all adjacent pairs must satisfy the comparison
@@ -197,10 +198,7 @@ pub fn builtin_add(args: &[Value]) -> Result<Value, SchemeError> {
 
 pub fn builtin_sub(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
-        [] => Err(SchemeError::ArityError {
-            expected: 1,
-            got: 0,
-        }),
+        [] => Err(SchemeError::arity_error(1, 0)),
         [Value::Number(first)] => {
             // Unary minus: check for overflow when negating
             let result = first.checked_neg().ok_or_else(|| {
@@ -229,10 +227,7 @@ pub fn builtin_sub(args: &[Value]) -> Result<Value, SchemeError> {
 pub fn builtin_mul(args: &[Value]) -> Result<Value, SchemeError> {
     // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns 1)
     if args.is_empty() {
-        return Err(SchemeError::ArityError {
-            expected: 1,
-            got: 0,
-        });
+        return Err(SchemeError::arity_error(1, 0));
     }
 
     let mut product = 1i64;
@@ -256,10 +251,7 @@ pub fn builtin_car(args: &[Value]) -> Result<Value, SchemeError> {
             [first, ..] => Ok(first.clone()),
         },
         [_] => Err(SchemeError::TypeError("car requires a list".to_string())),
-        _ => Err(SchemeError::ArityError {
-            expected: 1,
-            got: args.len(),
-        }),
+        _ => Err(SchemeError::arity_error(1, args.len())),
     }
 }
 
@@ -270,10 +262,7 @@ pub fn builtin_cdr(args: &[Value]) -> Result<Value, SchemeError> {
             [_, rest @ ..] => Ok(Value::List(rest.to_vec())),
         },
         [_] => Err(SchemeError::TypeError("cdr requires a list".to_string())),
-        _ => Err(SchemeError::ArityError {
-            expected: 1,
-            got: args.len(),
-        }),
+        _ => Err(SchemeError::arity_error(1, args.len())),
     }
 }
 
@@ -288,10 +277,7 @@ pub fn builtin_cons(args: &[Value]) -> Result<Value, SchemeError> {
             // SCHEME-STRICT: Require second argument to be a list (Scheme R7RS allows improper lists)
             "cons requires a list as second argument".to_string(),
         )),
-        _ => Err(SchemeError::ArityError {
-            expected: 2,
-            got: args.len(),
-        }),
+        _ => Err(SchemeError::arity_error(2, args.len())),
     }
 }
 
@@ -302,10 +288,7 @@ pub fn builtin_list(args: &[Value]) -> Result<Value, SchemeError> {
 pub fn builtin_null(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
         [value] => Ok(Value::Bool(value.is_nil())),
-        _ => Err(SchemeError::ArityError {
-            expected: 1,
-            got: args.len(),
-        }),
+        _ => Err(SchemeError::arity_error(1, args.len())),
     }
 }
 
@@ -315,10 +298,7 @@ pub fn builtin_not(args: &[Value]) -> Result<Value, SchemeError> {
         [_] => Err(SchemeError::TypeError(
             "not requires a boolean argument".to_string(),
         )),
-        _ => Err(SchemeError::ArityError {
-            expected: 1,
-            got: args.len(),
-        }),
+        _ => Err(SchemeError::arity_error(1, args.len())),
     }
 }
 
@@ -328,10 +308,7 @@ pub fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
             // Scheme's equal? is structural equality for all types
             Ok(Value::Bool(first == second))
         }
-        _ => Err(SchemeError::ArityError {
-            expected: 2,
-            got: args.len(),
-        }),
+        _ => Err(SchemeError::arity_error(2, args.len())),
     }
 }
 
