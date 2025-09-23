@@ -69,6 +69,33 @@ pub enum Arity {
     Any,
 }
 
+impl Arity {
+    /// Check if the given number of arguments is valid for this arity constraint
+    pub fn validate(&self, arg_count: usize) -> Result<(), SchemeError> {
+        let valid = match self {
+            Arity::Exact(n) => arg_count == *n,
+            Arity::AtLeast(n) => arg_count >= *n,
+            Arity::Range(min, max) => arg_count >= *min && arg_count <= *max,
+            Arity::Any => true,
+        };
+
+        if valid {
+            Ok(())
+        } else {
+            Err(SchemeError::ArityError {
+                expected: match self {
+                    Arity::Exact(n) => *n,
+                    Arity::AtLeast(n) => *n,
+                    Arity::Range(min, _) => *min,
+                    Arity::Any => 0,
+                },
+                got: arg_count,
+                expression: None,  // Builtin validation doesn't have expression context
+            })
+        }
+    }
+}
+
 /// Represents the implementation of a built-in expression (function or special form)
 #[derive(Clone)]
 pub enum OpKind {
@@ -120,27 +147,7 @@ impl BuiltinOp {
 
     /// Check if the given number of arguments is valid for this operation
     pub fn validate_arity(&self, arg_count: usize) -> Result<(), SchemeError> {
-        let valid = match &self.arity {
-            Arity::Exact(n) => arg_count == *n,
-            Arity::AtLeast(n) => arg_count >= *n,
-            Arity::Range(min, max) => arg_count >= *min && arg_count <= *max,
-            Arity::Any => true,
-        };
-
-        if valid {
-            Ok(())
-        } else {
-            Err(SchemeError::ArityError {
-                expected: match &self.arity {
-                    Arity::Exact(n) => *n,
-                    Arity::AtLeast(n) => *n,
-                    Arity::Range(min, _) => *min,
-                    Arity::Any => 0,
-                },
-                got: arg_count,
-                expression: None,  // Builtin validation doesn't have expression context
-            })
-        }
+        self.arity.validate(arg_count)
     }
 }
 
@@ -1162,5 +1169,39 @@ mod tests {
             special_forms.len() + regular_functions.len(),
             BUILTIN_OPS.len()
         );
+    }
+
+    #[test]
+    fn test_arity_validation() {
+        // Test Arity::Exact validation
+        assert!(Arity::Exact(2).validate(2).is_ok());
+        assert!(Arity::Exact(2).validate(1).is_err());
+        assert!(Arity::Exact(2).validate(3).is_err());
+
+        // Test Arity::AtLeast validation
+        assert!(Arity::AtLeast(1).validate(1).is_ok());
+        assert!(Arity::AtLeast(1).validate(2).is_ok());
+        assert!(Arity::AtLeast(1).validate(0).is_err());
+
+        // Test Arity::Range validation
+        assert!(Arity::Range(1, 3).validate(1).is_ok());
+        assert!(Arity::Range(1, 3).validate(2).is_ok());
+        assert!(Arity::Range(1, 3).validate(3).is_ok());
+        assert!(Arity::Range(1, 3).validate(0).is_err());
+        assert!(Arity::Range(1, 3).validate(4).is_err());
+
+        // Test Arity::Any validation
+        assert!(Arity::Any.validate(0).is_ok());
+        assert!(Arity::Any.validate(1).is_ok());
+        assert!(Arity::Any.validate(100).is_ok());
+
+        // Test error messages
+        match Arity::Exact(2).validate(1) {
+            Err(SchemeError::ArityError { expected, got, .. }) => {
+                assert_eq!(expected, 2);
+                assert_eq!(got, 1);
+            }
+            _ => panic!("Expected ArityError"),
+        }
     }
 }
