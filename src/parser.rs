@@ -164,7 +164,7 @@ fn parse_list(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&s
                     input,
                     Value::PrecompiledOp {
                         op: builtin_op,
-                        op_name: "quote".to_string(),
+                        op_id: "quote".to_string(),
                         args: vec![content],
                     },
                 ));
@@ -195,7 +195,7 @@ fn parse_list(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&s
                     input,
                     Value::PrecompiledOp {
                         op: builtin_op,
-                        op_name: op_name.clone(),
+                        op_id: op_name.clone(),
                         args,
                     },
                 ));
@@ -233,7 +233,7 @@ fn parse_quote(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&
                 input,
                 Value::PrecompiledOp {
                     op: builtin_op,
-                    op_name: "quote".to_string(),
+                    op_id: "quote".to_string(),
                     args: vec![expr],
                 },
             ));
@@ -471,8 +471,8 @@ mod tests {
     #[test]
     fn test_parse_quote() {
         // Test quote shorthand - with precompilation enabled, should create PrecompiledOp
-        if let Value::PrecompiledOp { op_name, args, .. } = parse("'foo").unwrap() {
-            assert_eq!(op_name, "quote");
+        if let Value::PrecompiledOp { op_id, args, .. } = parse("'foo").unwrap() {
+            assert_eq!(op_id, "quote");
             assert_eq!(args.len(), 1);
             assert_eq!(args[0], Value::Symbol("foo".to_string()));
         } else {
@@ -480,8 +480,8 @@ mod tests {
         }
 
         // Test quote with list - should create PrecompiledOp with unprecompiled content
-        if let Value::PrecompiledOp { op_name, args, .. } = parse("'(1 2 3)").unwrap() {
-            assert_eq!(op_name, "quote");
+        if let Value::PrecompiledOp { op_id, args, .. } = parse("'(1 2 3)").unwrap() {
+            assert_eq!(op_id, "quote");
             assert_eq!(args.len(), 1);
             assert_eq!(
                 args[0],
@@ -492,8 +492,8 @@ mod tests {
         }
 
         // Test quote with nil - should create PrecompiledOp with empty list content
-        if let Value::PrecompiledOp { op_name, args, .. } = parse("'()").unwrap() {
-            assert_eq!(op_name, "quote");
+        if let Value::PrecompiledOp { op_id, args, .. } = parse("'()").unwrap() {
+            assert_eq!(op_id, "quote");
             assert_eq!(args.len(), 1);
             assert_eq!(args[0], Value::List(vec![]));
         } else {
@@ -528,8 +528,8 @@ mod tests {
 
         // Test that builtin operations are parsed as PrecompiledOp
         match parse("(+ 1 2)").unwrap() {
-            Value::PrecompiledOp { op_name, args, .. } => {
-                assert_eq!(op_name, "+");
+            Value::PrecompiledOp { op_id, args, .. } => {
+                assert_eq!(op_id, "+");
                 assert_eq!(args, vec![Value::Number(1), Value::Number(2)]);
             }
             other => panic!("Expected PrecompiledOp, got {:?}", other),
@@ -537,8 +537,8 @@ mod tests {
 
         // Test multiple builtin operations
         match parse("(* 3 4 5)").unwrap() {
-            Value::PrecompiledOp { op_name, args, .. } => {
-                assert_eq!(op_name, "*");
+            Value::PrecompiledOp { op_id, args, .. } => {
+                assert_eq!(op_id, "*");
                 assert_eq!(
                     args,
                     vec![Value::Number(3), Value::Number(4), Value::Number(5)]
@@ -549,8 +549,8 @@ mod tests {
 
         // Test builtin comparison operations
         match parse("(< 1 2)").unwrap() {
-            Value::PrecompiledOp { op_name, args, .. } => {
-                assert_eq!(op_name, "<");
+            Value::PrecompiledOp { op_id, args, .. } => {
+                assert_eq!(op_id, "<");
                 assert_eq!(args, vec![Value::Number(1), Value::Number(2)]);
             }
             other => panic!("Expected PrecompiledOp, got {:?}", other),
@@ -558,8 +558,8 @@ mod tests {
 
         // Test builtin special forms
         match parse("(if #t 1 2)").unwrap() {
-            Value::PrecompiledOp { op_name, args, .. } => {
-                assert_eq!(op_name, "if");
+            Value::PrecompiledOp { op_id, args, .. } => {
+                assert_eq!(op_id, "if");
                 assert_eq!(
                     args,
                     vec![Value::Bool(true), Value::Number(1), Value::Number(2)]
@@ -580,8 +580,8 @@ mod tests {
 
         // Test that quote IS precompiled (like other special forms)
         match parse("(quote foo)").unwrap() {
-            Value::PrecompiledOp { op_name, args, .. } => {
-                assert_eq!(op_name, "quote");
+            Value::PrecompiledOp { op_id, args, .. } => {
+                assert_eq!(op_id, "quote");
                 assert_eq!(args, vec![Value::Symbol("foo".to_string())]);
             }
             other => panic!("Expected PrecompiledOp for quote, got {:?}", other),
@@ -593,8 +593,8 @@ mod tests {
                 assert_eq!(elements.len(), 2);
                 // First element should be PrecompiledOp
                 match &elements[0] {
-                    Value::PrecompiledOp { op_name, args, .. } => {
-                        assert_eq!(op_name, "+");
+                    Value::PrecompiledOp { op_id, args, .. } => {
+                        assert_eq!(op_id, "+");
                         assert_eq!(args, &vec![Value::Number(1), Value::Number(2)]);
                     }
                     other => panic!("Expected PrecompiledOp, got {:?}", other),

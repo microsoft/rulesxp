@@ -1,7 +1,7 @@
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use sexpr::evaluator;
-use sexpr::jsonlogic::{parse_jsonlogic, value_to_jsonlogic};
+use sexpr::jsonlogic::{ast_to_jsonlogic, parse_jsonlogic};
 use sexpr::parser::parse as parse_scheme;
 
 fn main() {
@@ -77,7 +77,7 @@ fn main() {
                             Ok(expr) => {
                                 // If in JSONLogic mode, show the parsed expression as JSONLogic
                                 if jsonlogic_mode {
-                                    match value_to_jsonlogic(&expr) {
+                                    match ast_to_jsonlogic(&expr) {
                                         Ok(json_str) => println!("→ {}", json_str),
                                         Err(_) => {} // Skip if conversion fails
                                     }
@@ -91,7 +91,7 @@ fn main() {
                 match result {
                     Ok(result) => {
                         if jsonlogic_mode {
-                            match value_to_jsonlogic(&result) {
+                            match ast_to_jsonlogic(&result) {
                                 Ok(json_str) => println!("{}", json_str),
                                 Err(_) => println!("{}", result), // Fallback to S-expression if conversion fails
                             }

@@ -1,8 +1,12 @@
 use crate::SchemeError;
 use crate::builtinops::BuiltinOp;
 
-/// Core value types in our Scheme interpreter
-#[derive(Debug, Clone, PartialEq)]
+/// Core AST value types in our Scheme interpreter
+///
+/// Note: PrecompiledOps (optimized s-expressions) don't equality-compare to dynamically
+/// generated unoptimized s-expressions. However, since no expression can *return* a
+/// PrecompiledOp (they're consumed during evaluation), this is not a concern for user code.
+#[derive(Debug, Clone)]
 pub enum Value {
     /// Numbers (integers only)
     Number(i64),
@@ -17,11 +21,15 @@ pub enum Value {
     /// Pre-compiled operations with their arguments (optimized during parsing)
     PrecompiledOp {
         op: &'static BuiltinOp,
-        op_name: String,
+        op_id: String,
         args: Vec<Value>,
     },
     /// Built-in functions (used when called through Symbol, not pre-optimized due to dynamism)
-    BuiltinFunction(fn(&[Value]) -> Result<Value, SchemeError>),
+    /// Uses id string for equality comparison instead of function pointer
+    BuiltinFunction {
+        id: String,
+        func: fn(&[Value]) -> Result<Value, SchemeError>,
+    },
     /// User-defined functions (params, body, closure env)
     Function {
         params: Vec<String>,
@@ -47,7 +55,7 @@ impl std::fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::BuiltinFunction(_) => write!(f, "#<builtin-function>"),
+            Value::BuiltinFunction { id, .. } => write!(f, "#<builtin-function:{}>", id),
             Value::PrecompiledOp { .. } => {
                 // Display PrecompiledOp as parseable list form for round-trip compatibility
                 write!(f, "{}", self.to_uncompiled_form())
@@ -61,8 +69,8 @@ impl Value {
     /// Convert PrecompiledOp back to List form for display purposes
     pub fn to_uncompiled_form(&self) -> Value {
         match self {
-            Value::PrecompiledOp { op_name, args, .. } => {
-                let mut elements = vec![Value::Symbol(op_name.clone())];
+            Value::PrecompiledOp { op, args, .. } => {
+                let mut elements = vec![Value::Symbol(op.scheme_id.to_string())];
                 for arg in args {
                     elements.push(arg.to_uncompiled_form()); // Recursively convert nested PrecompiledOps
                 }
@@ -84,5 +92,49 @@ impl Value {
     /// Check if a value represents nil (empty list)
     pub fn is_nil(&self) -> bool {
         matches!(self, Value::List(list) if list.is_empty())
+    }
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Number(a), Value::Number(b)) => a == b,
+            (Value::Symbol(a), Value::Symbol(b)) => a == b,
+            (Value::String(a), Value::String(b)) => a == b,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::List(a), Value::List(b)) => a == b,
+            (
+                Value::PrecompiledOp {
+                    op_id: id1,
+                    args: args1,
+                    ..
+                },
+                Value::PrecompiledOp {
+                    op_id: id2,
+                    args: args2,
+                    ..
+                },
+            ) => {
+                // Compare PrecompiledOps by id string, not function pointer
+                id1 == id2 && args1 == args2
+            }
+            (Value::BuiltinFunction { id: id1, .. }, Value::BuiltinFunction { id: id2, .. }) => {
+                // Compare BuiltinFunctions by id string, not function pointer
+                id1 == id2
+            }
+            (
+                Value::Function {
+                    params: p1,
+                    body: b1,
+                    env: e1,
+                },
+                Value::Function {
+                    params: p2,
+                    body: b2,
+                    env: e2,
+                },
+            ) => p1 == p2 && b1 == b2 && e1 == e2,
+            _ => false, // Different variants are never equal
+        }
     }
 }

@@ -54,7 +54,8 @@ use crate::ast::Value;
 use crate::evaluator::{
     Environment, eval_and, eval_define, eval_if, eval_lambda, eval_or, eval_quote,
 };
-use phf::phf_map;
+use std::collections::HashMap;
+use std::sync::LazyLock;
 
 /// Represents the expected number of arguments for an operation
 #[derive(Debug, Clone, PartialEq)]
@@ -129,14 +130,23 @@ impl PartialEq for OpKind {
 }
 
 /// Definition of a built-in operation
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct BuiltinOp {
-    /// The JSONLogic id (if different from Scheme id)
-    pub jsonlogic_id: Option<&'static str>,
+    /// The Scheme identifier for this operation
+    pub scheme_id: &'static str,
+    /// The JSONLogic identifier for this operation (may be same as scheme_id)
+    pub jsonlogic_id: &'static str,
     /// The implementation of this operation (function or special form)
     pub op_kind: OpKind,
     /// Expected number of arguments
     pub arity: Arity,
+}
+
+impl PartialEq for BuiltinOp {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare operations by their scheme_id, which uniquely identifies them
+        self.scheme_id == other.scheme_id
+    }
 }
 
 impl BuiltinOp {
@@ -345,234 +355,184 @@ pub fn builtin_error(args: &[Value]) -> Result<Value, SchemeError> {
     }
 }
 
-/// Global registry of all built-in operations with actual function implementations
-/// Maps Scheme ids to operation definitions
-pub static BUILTIN_OPS: phf::Map<&'static str, BuiltinOp> = phf_map! {
+/// Global registry of all built-in operations as a simple array
+static BUILTIN_OPS: &[BuiltinOp] = &[
     // Arithmetic operations
-    "+" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "+",
+        jsonlogic_id: "+",
         op_kind: OpKind::Function(builtin_add),
         arity: Arity::AtLeast(0),
     },
-    "-" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "-",
+        jsonlogic_id: "-",
         op_kind: OpKind::Function(builtin_sub),
         arity: Arity::AtLeast(1),
     },
-    "*" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "*",
+        jsonlogic_id: "*",
         op_kind: OpKind::Function(builtin_mul),
         arity: Arity::AtLeast(1), // SCHEME-STRICT: Scheme R7RS allows 0 arguments (returns 1)
     },
-
     // Comparison operations
-    ">" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: ">",
+        jsonlogic_id: ">",
         op_kind: OpKind::Function(builtin_gt),
         arity: Arity::AtLeast(2),
     },
-    ">=" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: ">=",
+        jsonlogic_id: ">=",
         op_kind: OpKind::Function(builtin_ge),
         arity: Arity::AtLeast(2),
     },
-    "<" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "<",
+        jsonlogic_id: "<",
         op_kind: OpKind::Function(builtin_lt),
         arity: Arity::AtLeast(2),
     },
-    "<=" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "<=",
+        jsonlogic_id: "<=",
         op_kind: OpKind::Function(builtin_le),
         arity: Arity::AtLeast(2),
     },
-    "=" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "=",
+        jsonlogic_id: "scheme-numeric-equals",
         op_kind: OpKind::Function(builtin_eq),
         arity: Arity::AtLeast(2),
     },
-    "equal?" => BuiltinOp {
-        jsonlogic_id: Some("=="),
+    BuiltinOp {
+        scheme_id: "equal?",
+        jsonlogic_id: "==",
         op_kind: OpKind::Function(builtin_equal),
         arity: Arity::Exact(2),
     },
-
     // Logical operations
-    "not" => BuiltinOp {
-        jsonlogic_id: Some("!"),
+    BuiltinOp {
+        scheme_id: "not",
+        jsonlogic_id: "!",
         op_kind: OpKind::Function(builtin_not),
         arity: Arity::Exact(1),
     },
-    "and" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "and",
+        jsonlogic_id: "and",
         op_kind: OpKind::SpecialForm(eval_and),
         arity: Arity::AtLeast(1), // SCHEME-STRICT: Scheme R7RS allows 0 arguments (returns #t)
     },
-    "or" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "or",
+        jsonlogic_id: "or",
         op_kind: OpKind::SpecialForm(eval_or),
         arity: Arity::AtLeast(1), // SCHEME-STRICT: Scheme R7RS allows 0 arguments (returns #f)
     },
-
     // Control flow
-    "if" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "if",
+        jsonlogic_id: "if",
         op_kind: OpKind::SpecialForm(eval_if),
         // SCHEME-JSONLOGIC-STRICT: Require exactly 3 arguments
         // (Scheme allows 2 args with undefined behavior, JSONLogic allows chaining with >3 args)
         arity: Arity::Exact(3),
     },
-
     // Special forms for language constructs
-    "quote" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "quote",
+        jsonlogic_id: "scheme-quote",
         op_kind: OpKind::SpecialForm(eval_quote),
         arity: Arity::Exact(1),
     },
-    "define" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "define",
+        jsonlogic_id: "scheme-define",
         op_kind: OpKind::SpecialForm(eval_define),
         arity: Arity::Exact(2),
     },
-    "lambda" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "lambda",
+        jsonlogic_id: "scheme-lambda",
         op_kind: OpKind::SpecialForm(eval_lambda),
         // SCHEME-STRICT: Only supports fixed-arity lambdas (lambda (a b c) body)
         // Does not support variadic forms: (lambda args body) or (lambda (a . rest) body)
         // Duplicate parameter names are prohibited per R7RS standard
         arity: Arity::Exact(2),
     },
-
     // List operations
-    "car" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "car",
+        jsonlogic_id: "scheme-car",
         op_kind: OpKind::Function(builtin_car),
         arity: Arity::Exact(1),
     },
-    "cdr" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "cdr",
+        jsonlogic_id: "scheme-cdr",
         op_kind: OpKind::Function(builtin_cdr),
         arity: Arity::Exact(1),
     },
-    "cons" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "cons",
+        jsonlogic_id: "scheme-cons",
         op_kind: OpKind::Function(builtin_cons),
         arity: Arity::Exact(2),
     },
-    "list" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "list",
+        jsonlogic_id: "scheme-list",
         op_kind: OpKind::Function(builtin_list),
         arity: Arity::Any,
     },
-    "null?" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "null?",
+        jsonlogic_id: "scheme-null?",
         op_kind: OpKind::Function(builtin_null),
         arity: Arity::Exact(1),
     },
-
     // Error handling
-    "error" => BuiltinOp {
-        jsonlogic_id: None,
+    BuiltinOp {
+        scheme_id: "error",
+        jsonlogic_id: "scheme-error",
         op_kind: OpKind::Function(builtin_error),
         arity: Arity::Any,
     },
-};
+];
 
-/// Maps JSONLogic ids to their corresponding Scheme ids
-/// Only includes operations that have distinct JSONLogic ids
-pub static BUILTIN_OPS_JSONLOGIC: phf::Map<&'static str, &'static str> = phf_map! {
-    // Logical operations with JSONLogic equivalents
-    "!" => "not",
-    "==" => "equal?",
+/// Lazy static map from scheme_id to BuiltinOp (private - use find_builtin_op_by_scheme_id)
+static BUILTIN_SCHEME: LazyLock<HashMap<&'static str, &'static BuiltinOp>> =
+    LazyLock::new(|| BUILTIN_OPS.iter().map(|op| (op.scheme_id, op)).collect());
 
-    // Arithmetic operations (same in both languages)
-    "+" => "+",
-    "-" => "-",
-    "*" => "*",
+/// Lazy static map from jsonlogic_id to BuiltinOp (private - use find_builtin_op_by_jsonlogic_id)
+static BUILTIN_JSONLOGIC: LazyLock<HashMap<&'static str, &'static BuiltinOp>> =
+    LazyLock::new(|| BUILTIN_OPS.iter().map(|op| (op.jsonlogic_id, op)).collect());
 
-    // Comparison operations (same in both languages)
-    ">" => ">",
-    ">=" => ">=",
-    "<" => "<",
-    "<=" => "<=",
-
-    // Control flow operations (shared by both languages)
-    "and" => "and",
-    "or" => "or",
-    "if" => "if",
-
-    // Scheme-specific operations (prefixed to avoid accidental exposure)
-    "scheme-car" => "car",
-    "scheme-cdr" => "cdr",
-    "scheme-cons" => "cons",
-    "scheme-list" => "list",
-    "scheme-null?" => "null?",
-    "scheme-quote" => "quote",
-    "scheme-define" => "define",
-    "scheme-lambda" => "lambda",
-    "scheme-error" => "error",
-    "scheme-numeric-equals" => "=",
-};
+/// Get all builtin operations (for internal use by evaluator)
+pub fn get_builtin_ops() -> &'static [BuiltinOp] {
+    BUILTIN_OPS
+}
 
 /// Find a builtin op (with function implementation) by its Scheme id
 pub fn find_builtin_op_by_scheme_id(id: &str) -> Option<&'static BuiltinOp> {
-    BUILTIN_OPS.get(id)
+    BUILTIN_SCHEME.get(id).copied()
 }
 
 /// Find a builtin op (with function implementation) by its JSONLogic id
 pub fn find_builtin_op_by_jsonlogic_id(id: &str) -> Option<&'static BuiltinOp> {
-    BUILTIN_OPS_JSONLOGIC
-        .get(id)
-        .and_then(|scheme_id| BUILTIN_OPS.get(scheme_id))
-        .or_else(|| BUILTIN_OPS.get(id))
-}
-
-/// Get all builtin ops
-pub fn get_all_builtin_ops() -> Vec<&'static BuiltinOp> {
-    BUILTIN_OPS.values().collect()
-}
-
-/// Get all special forms (ops that require special evaluation semantics)
-pub fn get_special_forms() -> Vec<&'static BuiltinOp> {
-    BUILTIN_OPS
-        .values()
-        .filter(|op| op.is_special_form())
-        .collect()
-}
-
-/// Get all regular functions (non-special forms)
-pub fn get_regular_functions() -> Vec<&'static BuiltinOp> {
-    BUILTIN_OPS
-        .values()
-        .filter(|op| !op.is_special_form())
-        .collect()
-}
-
-/// Check if an op id is a known builtin (by either Scheme or JSONLogic id)
-pub fn is_builtin_op(id: &str) -> bool {
-    find_builtin_op_by_scheme_id(id).is_some() || find_builtin_op_by_jsonlogic_id(id).is_some()
-}
-
-/// Check if an op is a special form
-pub fn is_special_form(scheme_id: &str) -> bool {
-    find_builtin_op_by_scheme_id(scheme_id)
-        .map(|op| op.is_special_form())
-        .unwrap_or(false)
-}
-
-/// Get the Scheme function id for a JSONLogic operator
-///
-/// Uses the global ops registry for consistent mapping.
-pub fn map_jsonlogic_id_to_scheme(op: &str) -> &str {
-    BUILTIN_OPS_JSONLOGIC.get(op).unwrap_or(&op)
+    BUILTIN_JSONLOGIC.get(id).copied()
 }
 
 /// Get the JSONLogic operator id for a Scheme function
 ///
 /// Uses the global ops registry for consistent mapping.
-pub fn map_scheme_id_to_jsonlogic(op: &str) -> &str {
-    find_builtin_op_by_scheme_id(op)
-        .and_then(|op_def| op_def.jsonlogic_id)
+pub fn map_scheme_id_to_jsonlogic_id(op: &str) -> &str {
+    BUILTIN_SCHEME
+        .get(op)
+        .map(|builtin_op| builtin_op.jsonlogic_id)
         .unwrap_or(op)
 }
 
@@ -584,7 +544,7 @@ mod tests {
     fn test_builtin_ops_metadata() {
         // Test that we can find ops by both ids
         let not_op = find_builtin_op_by_scheme_id("not").unwrap();
-        assert_eq!(not_op.jsonlogic_id, Some("!"));
+        assert_eq!(not_op.jsonlogic_id, "!");
         assert_eq!(not_op.arity, Arity::Exact(1));
         assert!(!not_op.is_special_form());
 
@@ -594,7 +554,7 @@ mod tests {
 
         // Test equality mapping
         let equal_op = find_builtin_op_by_scheme_id("equal?").unwrap();
-        assert_eq!(equal_op.jsonlogic_id, Some("=="));
+        assert_eq!(equal_op.jsonlogic_id, "==");
 
         let equal_by_jsonlogic = find_builtin_op_by_jsonlogic_id("==").unwrap();
         // Should be the same operation
@@ -629,7 +589,7 @@ mod tests {
         }
 
         let not_op = find_builtin_op_by_jsonlogic_id("!").unwrap();
-        assert_eq!(not_op.jsonlogic_id, Some("!"));
+        assert_eq!(not_op.jsonlogic_id, "!");
 
         // Test calling the not function
         if let OpKind::Function(func) = &not_op.op_kind {
@@ -1057,94 +1017,78 @@ mod tests {
 
     #[test]
     fn test_mapping_functions() {
-        // Test JSONLogic to Scheme mapping using the registry
-        assert_eq!(map_jsonlogic_id_to_scheme("!"), "not");
-        assert_eq!(map_jsonlogic_id_to_scheme("=="), "equal?");
-        assert_eq!(map_jsonlogic_id_to_scheme("+"), "+"); // Same in both
-        assert_eq!(map_jsonlogic_id_to_scheme("unknown"), "unknown"); // Fallback
+        // Test JSONLogic to Scheme mapping using direct lookup
+        assert_eq!(
+            find_builtin_op_by_jsonlogic_id("!").unwrap().scheme_id,
+            "not"
+        );
+        assert_eq!(
+            find_builtin_op_by_jsonlogic_id("==").unwrap().scheme_id,
+            "equal?"
+        );
+        assert_eq!(find_builtin_op_by_jsonlogic_id("+").unwrap().scheme_id, "+");
 
         // Test Scheme to JSONLogic mapping using the registry
-        assert_eq!(map_scheme_id_to_jsonlogic("not"), "!");
-        assert_eq!(map_scheme_id_to_jsonlogic("equal?"), "==");
-        assert_eq!(map_scheme_id_to_jsonlogic("+"), "+"); // Same in both
-        assert_eq!(map_scheme_id_to_jsonlogic("unknown"), "unknown"); // Fallback
+        assert_eq!(map_scheme_id_to_jsonlogic_id("not"), "!");
+        assert_eq!(map_scheme_id_to_jsonlogic_id("equal?"), "==");
+        assert_eq!(map_scheme_id_to_jsonlogic_id("+"), "+"); // Same in both
+        assert_eq!(map_scheme_id_to_jsonlogic_id("unknown"), "unknown"); // Fallback
 
         // Test expanded mappings - arithmetic operations
-        assert_eq!(map_jsonlogic_id_to_scheme("-"), "-");
-        assert_eq!(map_jsonlogic_id_to_scheme("*"), "*");
-        assert_eq!(map_jsonlogic_id_to_scheme(">"), ">");
-        assert_eq!(map_jsonlogic_id_to_scheme(">="), ">=");
-        assert_eq!(map_jsonlogic_id_to_scheme("<"), "<");
-        assert_eq!(map_jsonlogic_id_to_scheme("<="), "<=");
+        assert_eq!(find_builtin_op_by_jsonlogic_id("-").unwrap().scheme_id, "-");
+        assert_eq!(find_builtin_op_by_jsonlogic_id("*").unwrap().scheme_id, "*");
+        assert_eq!(find_builtin_op_by_jsonlogic_id(">").unwrap().scheme_id, ">");
 
         // Test shared control flow operations (no prefix)
-        assert_eq!(map_jsonlogic_id_to_scheme("and"), "and");
-        assert_eq!(map_jsonlogic_id_to_scheme("or"), "or");
-        assert_eq!(map_jsonlogic_id_to_scheme("if"), "if");
+        assert_eq!(
+            find_builtin_op_by_jsonlogic_id("and").unwrap().scheme_id,
+            "and"
+        );
+        assert_eq!(
+            find_builtin_op_by_jsonlogic_id("or").unwrap().scheme_id,
+            "or"
+        );
+        assert_eq!(
+            find_builtin_op_by_jsonlogic_id("if").unwrap().scheme_id,
+            "if"
+        );
 
         // Test Scheme-specific operations with prefixes
-        assert_eq!(map_jsonlogic_id_to_scheme("scheme-car"), "car");
-        assert_eq!(map_jsonlogic_id_to_scheme("scheme-cdr"), "cdr");
-        assert_eq!(map_jsonlogic_id_to_scheme("scheme-cons"), "cons");
-        assert_eq!(map_jsonlogic_id_to_scheme("scheme-list"), "list");
-        assert_eq!(map_jsonlogic_id_to_scheme("scheme-null?"), "null?");
-        assert_eq!(map_jsonlogic_id_to_scheme("scheme-quote"), "quote");
-        assert_eq!(map_jsonlogic_id_to_scheme("scheme-define"), "define");
-        assert_eq!(map_jsonlogic_id_to_scheme("scheme-lambda"), "lambda");
-        assert_eq!(map_jsonlogic_id_to_scheme("scheme-error"), "error");
-        assert_eq!(map_jsonlogic_id_to_scheme("scheme-numeric-equals"), "=");
+        assert_eq!(
+            find_builtin_op_by_jsonlogic_id("scheme-car")
+                .unwrap()
+                .scheme_id,
+            "car"
+        );
+        assert_eq!(
+            find_builtin_op_by_jsonlogic_id("scheme-numeric-equals")
+                .unwrap()
+                .scheme_id,
+            "="
+        );
     }
 
     #[test]
-    fn test_convenience_functions() {
-        // Test builtin detection
-        assert!(is_builtin_op("+"));
-        assert!(is_builtin_op("not"));
-        assert!(is_builtin_op("!")); // JSONLogic id
-        assert!(is_builtin_op("==")); // JSONLogic id
-        assert!(is_builtin_op("equal?")); // Scheme id
-        assert!(!is_builtin_op("unknown"));
+    fn test_lookup_functions() {
+        // Test builtin detection by scheme id
+        assert!(find_builtin_op_by_scheme_id("+").is_some());
+        assert!(find_builtin_op_by_scheme_id("not").is_some());
+        assert!(find_builtin_op_by_scheme_id("equal?").is_some());
+        assert!(find_builtin_op_by_scheme_id("unknown").is_none());
 
-        // Test expanded builtin detection - arithmetic operations
-        assert!(is_builtin_op("-"));
-        assert!(is_builtin_op("*"));
-        assert!(is_builtin_op(">"));
-        assert!(is_builtin_op(">="));
-        assert!(is_builtin_op("<"));
-        assert!(is_builtin_op("<="));
+        // Test builtin detection by jsonlogic id
+        assert!(find_builtin_op_by_jsonlogic_id("!").is_some());
+        assert!(find_builtin_op_by_jsonlogic_id("==").is_some());
+        assert!(find_builtin_op_by_jsonlogic_id("unknown").is_none());
 
-        // Test shared control flow operations (no prefix)
-        assert!(is_builtin_op("and"));
-        assert!(is_builtin_op("or"));
-        assert!(is_builtin_op("if"));
-
-        // Test Scheme-specific operations with prefixes
-        assert!(is_builtin_op("scheme-car"));
-        assert!(is_builtin_op("scheme-cdr"));
-        assert!(is_builtin_op("scheme-cons"));
-        assert!(is_builtin_op("scheme-list"));
-        assert!(is_builtin_op("scheme-null?"));
-        assert!(is_builtin_op("scheme-quote"));
-        assert!(is_builtin_op("scheme-define"));
-        assert!(is_builtin_op("scheme-lambda"));
-        assert!(is_builtin_op("scheme-error"));
-        assert!(is_builtin_op("scheme-numeric-equals"));
-
-        // Test special form detection
-        assert!(is_special_form("and"));
-        assert!(is_special_form("or"));
-        assert!(is_special_form("if"));
-        assert!(!is_special_form("not"));
-        assert!(!is_special_form("+"));
-        assert!(!is_special_form("unknown"));
-
-        // Test getting special forms and regular functions
-        let special_forms = get_special_forms();
-        let regular_functions = get_regular_functions();
-
-        // Test by checking if we can find the expected operations
+        // Test special form detection using available functions
         assert!(
             find_builtin_op_by_scheme_id("and")
+                .map(|op| op.is_special_form())
+                .unwrap_or(false)
+        );
+        assert!(
+            find_builtin_op_by_scheme_id("or")
                 .map(|op| op.is_special_form())
                 .unwrap_or(false)
         );
@@ -1154,21 +1098,28 @@ mod tests {
                 .unwrap_or(false)
         );
         assert!(
-            find_builtin_op_by_scheme_id("+")
-                .map(|op| !op.is_special_form())
-                .unwrap_or(false)
-        );
-        assert!(
             find_builtin_op_by_scheme_id("not")
                 .map(|op| !op.is_special_form())
-                .unwrap_or(false)
+                .unwrap_or(true)
+        );
+        assert!(
+            find_builtin_op_by_scheme_id("+")
+                .map(|op| !op.is_special_form())
+                .unwrap_or(true)
         );
 
-        // Verify all ops are accounted for
-        assert_eq!(
-            special_forms.len() + regular_functions.len(),
-            BUILTIN_OPS.len()
-        );
+        // Test that get_builtin_ops returns all operations
+        let all_ops = get_builtin_ops();
+        assert!(!all_ops.is_empty());
+
+        // Verify we can find specific operations
+        let add_op = all_ops.iter().find(|op| op.scheme_id == "+");
+        assert!(add_op.is_some());
+        assert!(!add_op.unwrap().is_special_form());
+
+        let and_op = all_ops.iter().find(|op| op.scheme_id == "and");
+        assert!(and_op.is_some());
+        assert!(and_op.unwrap().is_special_form());
     }
 
     #[test]

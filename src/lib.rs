@@ -112,18 +112,3 @@ pub mod builtinops;
 pub mod evaluator;
 pub mod jsonlogic;
 pub mod parser;
-
-// Core types and parsing
-pub use ast::Value;
-pub use parser::parse;
-
-// Evaluation engine
-pub use evaluator::{Environment, create_global_env, eval};
-
-// Built-in operations with dual-language support
-pub use builtinops::{
-    BUILTIN_OPS, BUILTIN_OPS_JSONLOGIC, map_jsonlogic_id_to_scheme, map_scheme_id_to_jsonlogic,
-};
-
-// JSONLogic integration
-pub use jsonlogic::{parse_jsonlogic, value_to_jsonlogic};

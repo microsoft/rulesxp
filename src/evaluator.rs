@@ -1,6 +1,6 @@
 use crate::SchemeError;
 use crate::ast::Value;
-use crate::builtinops::BUILTIN_OPS;
+use crate::builtinops::get_builtin_ops;
 use std::collections::HashMap;
 
 /// Environment for variable bindings
@@ -47,7 +47,7 @@ pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
         Value::Number(_)
         | Value::String(_)
         | Value::Bool(_)
-        | Value::BuiltinFunction(_)
+        | Value::BuiltinFunction { .. }
         | Value::Function { .. } => Ok(expr.clone()),
 
         // Variable lookup
@@ -137,7 +137,7 @@ fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeE
             // Apply the function
             match &func {
                 // Dynamic function calls
-                Value::BuiltinFunction(f) => f(&args),
+                Value::BuiltinFunction { func: f, .. } => f(&args),
                 Value::Function {
                     params,
                     body,
@@ -315,10 +315,16 @@ pub fn create_global_env() -> Environment {
     let mut env = Environment::new();
 
     // Add all regular functions from the registry
-    for (&scheme_id, builtin_op) in &BUILTIN_OPS {
+    for builtin_op in get_builtin_ops().iter() {
         if let crate::builtinops::OpKind::Function(func) = &builtin_op.op_kind {
             // Use BuiltinFunction for environment bindings (dynamic calls through symbols)
-            env.define(scheme_id.to_string(), Value::BuiltinFunction(*func));
+            env.define(
+                builtin_op.scheme_id.to_string(),
+                Value::BuiltinFunction {
+                    id: builtin_op.scheme_id.to_string(),
+                    func: *func,
+                },
+            );
         }
     }
 
@@ -690,7 +696,7 @@ mod tests {
             eval(&parse("(define my-plus +)").unwrap(), &mut env).unwrap();
             let result = eval(&parse("my-plus").unwrap(), &mut env).unwrap();
             match result {
-                Value::BuiltinFunction(_) => {} // Good - should be BuiltinFunction
+                Value::BuiltinFunction { .. } => {} // Good - should be BuiltinFunction
                 Value::PrecompiledOp { .. } => {
                     panic!("define stored PrecompiledOp - should be impossible!")
                 }
@@ -772,7 +778,7 @@ mod tests {
             eval(&parse("(define f +)").unwrap(), &mut env).unwrap();
             let result = eval(&parse("f").unwrap(), &mut env).unwrap();
             match result {
-                Value::BuiltinFunction(_) => {} // Self-evaluating
+                Value::BuiltinFunction { .. } => {} // Self-evaluating
                 _ => panic!("Expected BuiltinFunction to be self-evaluating"),
             }
         }

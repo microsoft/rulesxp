@@ -1,20 +1,20 @@
 use crate::SchemeError;
 use crate::ast::Value;
 use crate::builtinops::{
-    Arity, BUILTIN_OPS_JSONLOGIC, find_builtin_op_by_scheme_id, map_scheme_id_to_jsonlogic,
+    Arity, BuiltinOp, find_builtin_op_by_jsonlogic_id, map_scheme_id_to_jsonlogic_id,
 };
 use serde_json;
 
-/// Parse JSONLogic expression into our Value enum for evaluation
+/// Parse JSONLogic expression into AST value for evaluation
 pub fn parse_jsonlogic(input: &str) -> Result<Value, SchemeError> {
     let json_value: serde_json::Value = serde_json::from_str(input)
         .map_err(|e| SchemeError::ParseError(format!("Invalid JSON: {}", e)))?;
 
-    convert_json_to_value(json_value)
+    compile_json_to_ast(json_value)
 }
 
-/// Convert a serde_json::Value to our internal Value enum
-fn convert_json_to_value(json: serde_json::Value) -> Result<Value, SchemeError> {
+/// Compile a serde_json::Value to AST value
+fn compile_json_to_ast(json: serde_json::Value) -> Result<Value, SchemeError> {
     match json {
         // Primitives
         serde_json::Value::Null => Err(SchemeError::ParseError(
@@ -35,7 +35,7 @@ fn convert_json_to_value(json: serde_json::Value) -> Result<Value, SchemeError> 
         serde_json::Value::Array(arr) => {
             let converted: Vec<Value> = arr
                 .into_iter()
-                .map(convert_json_to_value)
+                .map(compile_json_to_ast)
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Value::List(converted))
         }
@@ -47,19 +47,19 @@ fn convert_json_to_value(json: serde_json::Value) -> Result<Value, SchemeError> 
             }
 
             let (operator, operands) = obj.into_iter().next().unwrap();
-            convert_jsonlogic_operation(&operator, operands)
+            compile_jsonlogic_operation(&operator, operands)
         }
     }
 }
 
-/// Convert JSONLogic operations to S-expression function calls
-fn convert_jsonlogic_operation(
+/// Compile JSONLogic operations to S-expression function calls
+fn compile_jsonlogic_operation(
     operator: &str,
     operands: serde_json::Value,
 ) -> Result<Value, SchemeError> {
     // Helper function to extract operands as a list, ignoring arity checks
     let extract_operand_list = |operands: serde_json::Value| -> Result<Vec<Value>, SchemeError> {
-        let converted = convert_json_to_value(operands)?;
+        let converted = compile_json_to_ast(operands)?;
         match converted {
             Value::List(list) => Ok(list),
             // If it's a single value, wrap it in a list
@@ -67,19 +67,12 @@ fn convert_jsonlogic_operation(
         }
     };
 
-    // Helper function to create PrecompiledOp if the operation exists
-    let create_precompiled_op = |scheme_op_name: &str, args: Vec<Value>| -> Value {
-        if let Some(builtin_op) = find_builtin_op_by_scheme_id(scheme_op_name) {
-            Value::PrecompiledOp {
-                op: builtin_op,
-                op_name: scheme_op_name.to_string(),
-                args,
-            }
-        } else {
-            // Fallback to regular list if not a builtin operation
-            let mut result = vec![Value::Symbol(scheme_op_name.to_string())];
-            result.extend(args);
-            Value::List(result)
+    // Helper function to create PrecompiledOp from a known builtin operation
+    let create_precompiled_op = |builtin_op: &'static BuiltinOp, args: Vec<Value>| -> Value {
+        Value::PrecompiledOp {
+            op: builtin_op,
+            op_id: builtin_op.scheme_id.to_string(),
+            args,
         }
     };
 
@@ -90,8 +83,13 @@ fn convert_jsonlogic_operation(
             let args = extract_operand_list(operands)?;
             // Validate that we have exactly 2 arguments for != operation
             Arity::Exact(2).validate(args.len())?;
-            let equal_op = create_precompiled_op("equal?", args);
-            Ok(create_precompiled_op("not", vec![equal_op]))
+
+            let equal_builtin =
+                find_builtin_op_by_jsonlogic_id("==").expect("== builtin should exist");
+            let equal_op = create_precompiled_op(equal_builtin, args);
+
+            let not_builtin = find_builtin_op_by_jsonlogic_id("!").expect("! builtin should exist");
+            Ok(create_precompiled_op(not_builtin, vec![equal_op]))
         }
 
         // Variable access (JSONLogic specific)
@@ -108,24 +106,18 @@ fn convert_jsonlogic_operation(
 
         // For all other operations, look them up in the registry
         _ => {
-            // Check if this operation is in the JSONLogic registry and has a builtin implementation
-            if let Some(scheme_id_and_op) =
-                BUILTIN_OPS_JSONLOGIC.get(operator).and_then(|scheme_id| {
-                    find_builtin_op_by_scheme_id(scheme_id).map(|op| (*scheme_id, op))
-                })
-            {
-                let (scheme_id, builtin_op) = scheme_id_and_op;
+            // Look up operation by JSONLogic id
+            if let Some(builtin_op) = find_builtin_op_by_jsonlogic_id(operator) {
                 let args = extract_operand_list(operands)?;
 
                 // Validate arity using the builtin operation's definition
                 builtin_op.validate_arity(args.len())?;
 
-                Ok(create_precompiled_op(scheme_id, args))
+                Ok(create_precompiled_op(builtin_op, args))
             } else {
-                // Operation not in registry or no builtin found - emit as regular list
-                let scheme_id = BUILTIN_OPS_JSONLOGIC.get(operator).unwrap_or(&operator);
+                // Operation not in registry - emit as regular list
                 let args = extract_operand_list(operands)?;
-                let mut result = vec![Value::Symbol(scheme_id.to_string())];
+                let mut result = vec![Value::Symbol(operator.to_string())];
                 result.extend(args);
                 Ok(Value::List(result))
             }
@@ -133,15 +125,15 @@ fn convert_jsonlogic_operation(
     }
 }
 
-/// Convert a Value back to JSONLogic format
-pub fn value_to_jsonlogic(value: &Value) -> Result<String, SchemeError> {
-    let json_value = value_to_json_value(value)?;
+/// Convert an AST value back to JSONLogic format
+pub fn ast_to_jsonlogic(value: &Value) -> Result<String, SchemeError> {
+    let json_value = ast_to_json_value(value)?;
     serde_json::to_string(&json_value)
         .map_err(|e| SchemeError::EvalError(format!("Failed to serialize JSON: {}", e)))
 }
 
-/// Convert a Value to serde_json::Value for JSONLogic output
-fn value_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> {
+/// Convert an AST value to serde_json::Value for JSONLogic output
+fn ast_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> {
     match value {
         Value::Number(n) => Ok(serde_json::Value::Number(serde_json::Number::from(*n))),
         Value::String(s) => Ok(serde_json::Value::String(s.clone())),
@@ -158,11 +150,11 @@ fn value_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> 
             // Check if this is a function call (first element is a symbol)
             if let Some(Value::Symbol(op)) = list.first() {
                 let args: Result<Vec<serde_json::Value>, SchemeError> =
-                    list[1..].iter().map(value_to_json_value).collect();
+                    list[1..].iter().map(ast_to_json_value).collect();
                 let args = args?;
 
                 // Convert Scheme operator names back to JSONLogic operators
-                let jsonlogic_op = map_scheme_id_to_jsonlogic(op);
+                let jsonlogic_op = map_scheme_id_to_jsonlogic_id(op);
 
                 // Handle different argument patterns
                 match args.len() {
@@ -178,27 +170,27 @@ fn value_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> 
             } else {
                 // Convert list elements
                 let converted: Result<Vec<serde_json::Value>, SchemeError> =
-                    list.iter().map(value_to_json_value).collect();
+                    list.iter().map(ast_to_json_value).collect();
                 Ok(serde_json::Value::Array(converted?))
             }
         }
-        Value::BuiltinFunction(_) => Err(SchemeError::EvalError(
+        Value::BuiltinFunction { .. } => Err(SchemeError::EvalError(
             "Cannot convert builtin function to JSONLogic".to_string(),
         )),
-        Value::PrecompiledOp { op_name, args, .. } => {
+        Value::PrecompiledOp { op, args, .. } => {
             // Convert Scheme operator names back to JSONLogic operators
-            let jsonlogic_op = map_scheme_id_to_jsonlogic(op_name);
+            let jsonlogic_op = op.jsonlogic_id;
 
             // Convert arguments
             let converted_args: Result<Vec<serde_json::Value>, SchemeError> =
-                args.iter().map(value_to_json_value).collect();
+                args.iter().map(ast_to_json_value).collect();
             let args = converted_args?;
 
             // Handle different argument patterns
             match args.len() {
                 0 => Err(SchemeError::EvalError(format!(
                     "Operation {} requires arguments",
-                    op_name
+                    op.scheme_id
                 ))),
                 _ => {
                     // Always use array format for all operations
@@ -392,19 +384,19 @@ mod tests {
     }
 
     #[test]
-    fn test_value_to_jsonlogic() {
+    fn test_ast_to_jsonlogic() {
         // Test primitives
-        assert_eq!(value_to_jsonlogic(&Value::Bool(true)).unwrap(), "true");
-        assert_eq!(value_to_jsonlogic(&Value::Bool(false)).unwrap(), "false");
-        assert_eq!(value_to_jsonlogic(&Value::Number(42)).unwrap(), "42");
+        assert_eq!(ast_to_jsonlogic(&Value::Bool(true)).unwrap(), "true");
+        assert_eq!(ast_to_jsonlogic(&Value::Bool(false)).unwrap(), "false");
+        assert_eq!(ast_to_jsonlogic(&Value::Number(42)).unwrap(), "42");
         assert_eq!(
-            value_to_jsonlogic(&Value::String("hello".to_string())).unwrap(),
+            ast_to_jsonlogic(&Value::String("hello".to_string())).unwrap(),
             "\"hello\""
         );
 
-        // Test symbols (converted to var operations)
+        // Test symbols (compiled to var operations)
         assert_eq!(
-            value_to_jsonlogic(&Value::Symbol("age".to_string())).unwrap(),
+            ast_to_jsonlogic(&Value::Symbol("age".to_string())).unwrap(),
             r#"{"var":"age"}"#
         );
 
@@ -415,13 +407,13 @@ mod tests {
             Value::Bool(false),
         ]);
         assert_eq!(
-            value_to_jsonlogic(&and_op).unwrap(),
+            ast_to_jsonlogic(&and_op).unwrap(),
             r#"{"and":[true,false]}"#
         );
 
         // Test unary operation (always uses array format)
         let not_op = Value::List(vec![Value::Symbol("not".to_string()), Value::Bool(true)]);
-        assert_eq!(value_to_jsonlogic(&not_op).unwrap(), r#"{"!":[true]}"#);
+        assert_eq!(ast_to_jsonlogic(&not_op).unwrap(), r#"{"!":[true]}"#);
 
         // Test equality operation
         let eq_op = Value::List(vec![
@@ -429,7 +421,7 @@ mod tests {
             Value::Number(1),
             Value::Number(2),
         ]);
-        assert_eq!(value_to_jsonlogic(&eq_op).unwrap(), r#"{"==":[1,2]}"#);
+        assert_eq!(ast_to_jsonlogic(&eq_op).unwrap(), r#"{"==":[1,2]}"#);
     }
 
     #[test]
@@ -441,35 +433,35 @@ mod tests {
         let parsed = parse_jsonlogic(original_json).unwrap();
         // Verify we got a PrecompiledOp
         assert!(matches!(parsed, Value::PrecompiledOp { .. }));
-        let back_to_json = value_to_jsonlogic(&parsed).unwrap();
+        let back_to_json = ast_to_jsonlogic(&parsed).unwrap();
         assert_eq!(back_to_json, original_json);
 
         // Test comparison operation
         let original_json = r#"{"==":[1,2]}"#;
         let parsed = parse_jsonlogic(original_json).unwrap();
         assert!(matches!(parsed, Value::PrecompiledOp { .. }));
-        let back_to_json = value_to_jsonlogic(&parsed).unwrap();
+        let back_to_json = ast_to_jsonlogic(&parsed).unwrap();
         assert_eq!(back_to_json, original_json);
 
         // Test logical operation
         let original_json = r#"{"and":[true,false]}"#;
         let parsed = parse_jsonlogic(original_json).unwrap();
         assert!(matches!(parsed, Value::PrecompiledOp { .. }));
-        let back_to_json = value_to_jsonlogic(&parsed).unwrap();
+        let back_to_json = ast_to_jsonlogic(&parsed).unwrap();
         assert_eq!(back_to_json, original_json);
 
         // Test unary operation
         let original_json = r#"{"!":[true]}"#;
         let parsed = parse_jsonlogic(original_json).unwrap();
         assert!(matches!(parsed, Value::PrecompiledOp { .. }));
-        let back_to_json = value_to_jsonlogic(&parsed).unwrap();
+        let back_to_json = ast_to_jsonlogic(&parsed).unwrap();
         assert_eq!(back_to_json, original_json);
 
         // Test nested operations
         let original_json = r#"{"and":[{"var":"age"},{">":[{"var":"age"},18]}]}"#;
         let parsed = parse_jsonlogic(original_json).unwrap();
         assert!(matches!(parsed, Value::PrecompiledOp { .. }));
-        let back_to_json = value_to_jsonlogic(&parsed).unwrap();
+        let back_to_json = ast_to_jsonlogic(&parsed).unwrap();
         assert_eq!(back_to_json, original_json);
 
         // Test "!=" semantic roundtrip (not exact)
@@ -479,7 +471,7 @@ mod tests {
         let original_json = r#"{"!=":[1,2]}"#;
         let parsed = parse_jsonlogic(original_json).unwrap();
         assert!(matches!(parsed, Value::PrecompiledOp { .. }));
-        let back_to_json = value_to_jsonlogic(&parsed).unwrap();
+        let back_to_json = ast_to_jsonlogic(&parsed).unwrap();
         // This demonstrates semantic but not exact roundtrip
         assert_eq!(back_to_json, r#"{"!":[{"==":[1,2]}]}"#);
         assert_ne!(back_to_json, original_json); // Not exact roundtrip
