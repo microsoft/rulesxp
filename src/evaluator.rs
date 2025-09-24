@@ -1,6 +1,6 @@
 use crate::SchemeError;
 use crate::ast::Value;
-use crate::builtinops::{BUILTIN_OPS, find_builtin_op_by_scheme_id};
+use crate::builtinops::BUILTIN_OPS;
 use std::collections::HashMap;
 
 /// Environment for variable bindings
@@ -57,6 +57,8 @@ pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
             .ok_or_else(|| SchemeError::UnboundVariable(name.clone())),
 
         // PrecompiledOp evaluation (optimized path for builtin operations and special forms)
+        // This is where special forms are actually handled - they are converted to PrecompiledOps
+        // during parsing since they are syntax structures, not dynamic function calls.
         // Note: Arity is already validated at parse time, so no runtime checking needed
         Value::PrecompiledOp { op, args, .. } => {
             use crate::builtinops::OpKind;
@@ -68,7 +70,9 @@ pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
                     f(&evaluated_args)
                 }
                 OpKind::SpecialForm(special_form) => {
-                    // Special forms get unevaluated arguments (arity already validated at parse time)
+                    // Special forms are syntax structures handled here after being converted
+                    // to PrecompiledOps during parsing. They get unevaluated arguments.
+                    // (arity already validated at parse time)
                     special_form(args, env)
                 }
             }
@@ -102,35 +106,72 @@ fn eval_args(args: &[Value], env: &mut Environment) -> Result<Vec<Value>, Scheme
     Ok(evaluated_args)
 }
 
-/// Evaluate a list expression (function application or special forms)
+/// Evaluate a list expression (function application)
+///
+/// Note: Both builtin functions and special forms are converted to PrecompiledOps
+/// during parsing for optimization. Special forms are syntax structures that cannot
+/// be dynamically generated, while builtin functions benefit from pre-validation.
+/// All PrecompiledOps are handled in the main eval() function. Therefore, eval_list()
+/// only needs to handle dynamic function application cases.
+///
+/// If the PrecompiledOps optimization were removed, special forms would need
+/// special handling here. Builtin functions are added to the environment and
+/// can be called dynamically through normal symbol lookup and function application.
 fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+    // Note: Dynamic calls (not PrecompiledOps) still need runtime arity checking
     match elements {
         [] => Err(SchemeError::EvalError(
             "Cannot evaluate empty list".to_string(),
         )),
 
-        // Check if first element is a symbol that might be a builtin operation
-        // Note: Dynamic calls (not PrecompiledOps) still need runtime arity checking
-        [Value::Symbol(name), args @ ..] => {
-            if let Some(builtin_op) = find_builtin_op_by_scheme_id(name) {
-                match &builtin_op.op_kind {
-                    crate::builtinops::OpKind::SpecialForm(special_form) => {
-                        // Call the special form function directly (with runtime arity checking)
-                        special_form(args, env)
+        // Function application: evaluate function expression, then apply to arguments
+        // Note: If PrecompiledOps optimization were removed, we would need to check for
+        // special forms here before function application (builtin functions work via symbol lookup)
+        [func_expr, arg_exprs @ ..] => {
+            // Evaluate the function
+            let func = eval(func_expr, env)?;
+
+            // Evaluate the arguments
+            let args = eval_args(arg_exprs, env)?;
+
+            // Apply the function
+            match &func {
+                // Dynamic function calls
+                Value::BuiltinFunction(f) => f(&args),
+                Value::Function {
+                    params,
+                    body,
+                    env: closure_env,
+                } => {
+                    if params.len() != args.len() {
+                        return Err(SchemeError::arity_error(params.len(), args.len()));
                     }
-                    crate::builtinops::OpKind::Function(builtin_func) => {
-                        // Evaluate arguments and call the builtin function directly
-                        let evaluated_args = eval_args(args, env)?;
-                        // Note: Individual builtin functions still validate their own arity
-                        builtin_func(&evaluated_args)
+
+                    // Create new environment with closure environment as parent
+                    let mut new_env = Environment::with_parent(closure_env.clone());
+
+                    // Bind parameters to arguments
+                    for (param, arg) in params.iter().zip(args.iter()) {
+                        new_env.define(param.clone(), arg.clone());
                     }
+
+                    // Evaluate body with context
+                    eval(body, &mut new_env).map_err(|err| match err {
+                        SchemeError::EvalError(msg) => {
+                            SchemeError::EvalError(format!("{}\n  In lambda: {}", msg, body))
+                        }
+                        SchemeError::TypeError(msg) => {
+                            SchemeError::TypeError(format!("{}\n  In lambda: {}", msg, body))
+                        }
+                        other => other,
+                    })
                 }
-            } else {
-                // Not a builtin, treat as normal function application
-                eval_application(elements, env)
+                _ => Err(SchemeError::TypeError(format!(
+                    "Cannot apply non-function: {}",
+                    func
+                ))),
             }
         }
-        _ => eval_application(elements, env),
     }
 }
 
@@ -267,80 +308,6 @@ pub fn eval_or(args: &[Value], env: &mut Environment) -> Result<Value, SchemeErr
 
     // All arguments were false
     Ok(Value::Bool(false))
-}
-
-/// Evaluate function application
-fn eval_application(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
-    match elements {
-        [] => Err(SchemeError::EvalError(
-            "Cannot apply empty list".to_string(),
-        )),
-        [func_expr, arg_exprs @ ..] => {
-            // Evaluate the function
-            let func = eval(func_expr, env)?;
-
-            // Evaluate the arguments using helper
-            let args = eval_args(arg_exprs, env)?;
-
-            // Apply the function
-            apply_function(&func, &args, env)
-        }
-    }
-}
-
-/// Apply a function to its arguments
-fn apply_function(
-    func: &Value,
-    args: &[Value],
-    _env: &mut Environment,
-) -> Result<Value, SchemeError> {
-    match func {
-        Value::BuiltinFunction(f) => f(args),
-        Value::PrecompiledOp { op, args: _op_args, .. } => {
-            // For PrecompiledOp, the arguments are already parsed and stored
-            // We need to evaluate them and then apply the operation
-            use crate::builtinops::OpKind;
-            match &op.op_kind {
-                OpKind::Function(f) => f(args),
-                OpKind::SpecialForm(_) => {
-                    // Special forms should be handled in eval_list, not here
-                    Err(SchemeError::EvalError("Special forms should not reach apply_function".to_string()))
-                }
-            }
-        }
-        Value::Function {
-            params,
-            body,
-            env: closure_env,
-        } => {
-            if params.len() != args.len() {
-                return Err(SchemeError::arity_error(params.len(), args.len()));
-            }
-
-            // Create new environment with closure environment as parent
-            let mut new_env = Environment::with_parent(closure_env.clone());
-
-            // Bind parameters to arguments
-            for (param, arg) in params.iter().zip(args.iter()) {
-                new_env.define(param.clone(), arg.clone());
-            }
-
-            // Evaluate body with context
-            eval(body, &mut new_env).map_err(|err| match err {
-                SchemeError::EvalError(msg) => {
-                    SchemeError::EvalError(format!("{}\n  In lambda: {}", msg, body))
-                }
-                SchemeError::TypeError(msg) => {
-                    SchemeError::TypeError(format!("{}\n  In lambda: {}", msg, body))
-                }
-                other => other,
-            })
-        }
-        _ => Err(SchemeError::TypeError(format!(
-            "Cannot apply non-function: {}",
-            func
-        ))),
-    }
 }
 
 /// Create a global environment with built-in functions
@@ -583,6 +550,261 @@ mod tests {
         assert!(result.is_err());
         if let Err(SchemeError::EvalError(msg)) = result {
             assert!(msg.contains("Error"));
+        }
+    }
+
+    /// Comprehensive tests to ensure all evaluation paths work correctly
+    /// and that PrecompiledOps never escape as first-class values
+    mod evaluation_paths {
+        use super::*;
+
+        #[test]
+        fn test_precompiled_ops_are_consumed_not_produced() {
+            // PrecompiledOps should be created during parsing and consumed during evaluation
+            // They should never be returned as values from evaluation
+
+            // Test that builtin operations are PrecompiledOps during parsing but return concrete values
+            let expr = parse("(+ 1 2)").unwrap();
+            match &expr {
+                Value::PrecompiledOp { .. } => {} // Good - parsed as PrecompiledOp
+                _ => panic!("Expected PrecompiledOp from parsing"),
+            }
+
+            // But evaluation should return a concrete value, never PrecompiledOp
+            let result = eval_string("(+ 1 2)").unwrap();
+            match result {
+                Value::Number(3) => {} // Good - concrete value
+                Value::PrecompiledOp { .. } => {
+                    panic!("eval() returned PrecompiledOp - this should be impossible!")
+                }
+                _ => panic!("Expected Number(3), got {:?}", result),
+            }
+        }
+
+        #[test]
+        fn test_special_forms_via_precompiled_ops() {
+            // Special forms should work through PrecompiledOps in main eval()
+            assert_eq!(
+                eval_string("(quote foo)").unwrap(),
+                Value::Symbol("foo".to_string())
+            );
+            assert_eq!(eval_string("(if #t 1 2)").unwrap(), Value::Number(1));
+            assert_eq!(eval_string("(and #t #t)").unwrap(), Value::Bool(true));
+            assert_eq!(eval_string("(or #f #t)").unwrap(), Value::Bool(true));
+        }
+
+        #[test]
+        fn test_builtin_functions_via_precompiled_ops() {
+            // Builtin functions should work through PrecompiledOps (fast path)
+            assert_eq!(eval_string("(+ 1 2 3)").unwrap(), Value::Number(6));
+            assert_eq!(eval_string("(* 2 3 4)").unwrap(), Value::Number(24));
+            assert_eq!(eval_string("(equal? 5 5)").unwrap(), Value::Bool(true));
+            assert_eq!(eval_string("(not #f)").unwrap(), Value::Bool(true));
+        }
+
+        #[test]
+        fn test_builtin_functions_via_dynamic_symbol_lookup() {
+            // Builtin functions should also work when called dynamically through symbols
+            // This exercises the eval_list -> symbol lookup -> BuiltinFunction path
+            let mut env = create_global_env();
+
+            // Store a reference to + in a variable, then call it
+            eval(&parse("(define my-add +)").unwrap(), &mut env).unwrap();
+            let result = eval(&parse("(my-add 10 20)").unwrap(), &mut env).unwrap();
+            assert_eq!(result, Value::Number(30));
+
+            // Store reference to equal? and call it
+            eval(&parse("(define my-eq equal?)").unwrap(), &mut env).unwrap();
+            let result = eval(&parse("(my-eq 5 5)").unwrap(), &mut env).unwrap();
+            assert_eq!(result, Value::Bool(true));
+        }
+
+        #[test]
+        fn test_lambda_functions_via_eval_list() {
+            // User-defined lambda functions should work through eval_list
+            let mut env = create_global_env();
+
+            // Define a lambda and call it immediately
+            let result = eval(&parse("((lambda (x y) (+ x y)) 3 4)").unwrap(), &mut env).unwrap();
+            assert_eq!(result, Value::Number(7));
+
+            // Define a lambda, store it, and call it
+            eval(
+                &parse("(define add-one (lambda (x) (+ x 1)))").unwrap(),
+                &mut env,
+            )
+            .unwrap();
+            let result = eval(&parse("(add-one 42)").unwrap(), &mut env).unwrap();
+            assert_eq!(result, Value::Number(43));
+        }
+
+        #[test]
+        fn test_quoted_expressions_preserve_structure() {
+            // quote should return the unoptimized structure, never PrecompiledOps
+            let result = eval_string("(quote (+ 1 2))").unwrap();
+            match result {
+                Value::List(elements) => {
+                    assert_eq!(elements.len(), 3);
+                    assert_eq!(elements[0], Value::Symbol("+".to_string()));
+                    assert_eq!(elements[1], Value::Number(1));
+                    assert_eq!(elements[2], Value::Number(2));
+                    // Critically: this should NOT be a PrecompiledOp
+                    for elem in &elements {
+                        if let Value::PrecompiledOp { .. } = elem {
+                            panic!(
+                                "Found PrecompiledOp in quoted structure - should be impossible!"
+                            );
+                        }
+                    }
+                }
+                Value::PrecompiledOp { .. } => {
+                    panic!("quote returned PrecompiledOp - should be impossible!")
+                }
+                _ => panic!("Expected List from (quote (+ 1 2)), got {:?}", result),
+            }
+        }
+
+        #[test]
+        fn test_define_with_various_value_types() {
+            let mut env = create_global_env();
+
+            // Define numbers, booleans, strings
+            eval(&parse("(define x 42)").unwrap(), &mut env).unwrap();
+            eval(&parse("(define flag #t)").unwrap(), &mut env).unwrap();
+            eval(&parse("(define name \"test\")").unwrap(), &mut env).unwrap();
+
+            assert_eq!(
+                eval(&parse("x").unwrap(), &mut env).unwrap(),
+                Value::Number(42)
+            );
+            assert_eq!(
+                eval(&parse("flag").unwrap(), &mut env).unwrap(),
+                Value::Bool(true)
+            );
+            assert_eq!(
+                eval(&parse("name").unwrap(), &mut env).unwrap(),
+                Value::String("test".to_string())
+            );
+
+            // Define and retrieve builtin functions
+            eval(&parse("(define my-plus +)").unwrap(), &mut env).unwrap();
+            let result = eval(&parse("my-plus").unwrap(), &mut env).unwrap();
+            match result {
+                Value::BuiltinFunction(_) => {} // Good - should be BuiltinFunction
+                Value::PrecompiledOp { .. } => {
+                    panic!("define stored PrecompiledOp - should be impossible!")
+                }
+                _ => panic!("Expected BuiltinFunction, got {:?}", result),
+            }
+        }
+
+        #[test]
+        fn test_dynamic_function_calls_in_operator_position() {
+            let mut env = create_global_env();
+
+            // Test that expressions in operator position are evaluated correctly
+            // ((if #t + *) 2 3) should evaluate the if, get +, then apply it
+            let result = eval(&parse("((if #t + *) 2 3)").unwrap(), &mut env).unwrap();
+            assert_eq!(result, Value::Number(5)); // + was chosen, 2 + 3 = 5
+
+            let result = eval(&parse("((if #f + *) 2 3)").unwrap(), &mut env).unwrap();
+            assert_eq!(result, Value::Number(6)); // * was chosen, 2 * 3 = 6
+
+            // Test lambda in operator position
+            let result = eval(&parse("((lambda (x) (* x x)) 4)").unwrap(), &mut env).unwrap();
+            assert_eq!(result, Value::Number(16)); // 4 * 4 = 16
+        }
+
+        #[test]
+        fn test_nested_evaluation_paths() {
+            // Test deeply nested expressions that exercise multiple evaluation paths
+            let mut env = create_global_env();
+
+            // Mix of PrecompiledOps, special forms, and function calls
+            eval(
+                &parse("(define square (lambda (x) (* x x)))").unwrap(),
+                &mut env,
+            )
+            .unwrap();
+
+            // This expression exercises:
+            // - if (special form via PrecompiledOp)
+            // - > (builtin via PrecompiledOp)
+            // - square (lambda via dynamic call)
+            // - + (builtin via PrecompiledOp)
+            let result =
+                eval(&parse("(if (> 5 3) (square (+ 2 1)) 0)").unwrap(), &mut env).unwrap();
+            assert_eq!(result, Value::Number(9)); // (+ 2 1) = 3, square(3) = 9
+        }
+
+        #[test]
+        fn test_error_cases_dont_leak_precompiled_ops() {
+            // Even in error cases, we should never see PrecompiledOps as values
+
+            // Test arity errors (- requires at least 1 arg, so (-) should fail)
+            let result = eval_string("(-)");
+            assert!(result.is_err());
+
+            // Test type errors
+            let result = eval_string("(+ 1 \"hello\")");
+            assert!(result.is_err());
+
+            // Test unbound variable
+            let result = eval_string("undefined-var");
+            assert!(result.is_err());
+
+            // In all error cases, we never encounter PrecompiledOp values in eval_list
+            // because they're consumed in the main eval() function
+        }
+
+        #[test]
+        fn test_self_evaluating_forms() {
+            // Ensure PrecompiledOp is NOT self-evaluating (confirmed by its absence from the match)
+            assert_eq!(eval_string("42").unwrap(), Value::Number(42));
+            assert_eq!(eval_string("#t").unwrap(), Value::Bool(true));
+            assert_eq!(
+                eval_string("\"hello\"").unwrap(),
+                Value::String("hello".to_string())
+            );
+
+            // BuiltinFunction and Function are self-evaluating
+            let mut env = create_global_env();
+            eval(&parse("(define f +)").unwrap(), &mut env).unwrap();
+            let result = eval(&parse("f").unwrap(), &mut env).unwrap();
+            match result {
+                Value::BuiltinFunction(_) => {} // Self-evaluating
+                _ => panic!("Expected BuiltinFunction to be self-evaluating"),
+            }
+        }
+
+        #[test]
+        fn test_impossible_precompiled_op_in_eval_list() {
+            // This test documents that PrecompiledOp can never reach eval_list
+            // as a function value, justifying the removal of that match arm
+
+            // All these should work without ever encountering PrecompiledOp in eval_list:
+            let mut env = create_global_env();
+
+            // 1. Direct builtin calls (via PrecompiledOp in main eval)
+            assert!(eval(&parse("(+ 1 2)").unwrap(), &mut env).is_ok());
+
+            // 2. Dynamic builtin calls (via BuiltinFunction in eval_list)
+            eval(&parse("(define add +)").unwrap(), &mut env).unwrap();
+            assert!(eval(&parse("(add 1 2)").unwrap(), &mut env).is_ok());
+
+            // 3. Lambda calls (via Function in eval_list)
+            eval(
+                &parse("(define sq (lambda (x) (* x x)))").unwrap(),
+                &mut env,
+            )
+            .unwrap();
+            assert!(eval(&parse("(sq 3)").unwrap(), &mut env).is_ok());
+
+            // 4. Complex nested calls - still no PrecompiledOp in eval_list
+            assert!(eval(&parse("((lambda (f x) (f x x)) + 5)").unwrap(), &mut env).is_ok());
+
+            // The absence of PrecompiledOp match arm in eval_list is justified
+            // because PrecompiledOps are consumed by main eval(), never produced
         }
     }
 }

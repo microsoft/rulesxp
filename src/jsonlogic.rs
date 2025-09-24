@@ -1,8 +1,7 @@
 use crate::SchemeError;
 use crate::ast::Value;
 use crate::builtinops::{
-    BUILTIN_OPS_JSONLOGIC, find_builtin_op_by_scheme_id,
-    map_scheme_id_to_jsonlogic, Arity,
+    Arity, BUILTIN_OPS_JSONLOGIC, find_builtin_op_by_scheme_id, map_scheme_id_to_jsonlogic,
 };
 use serde_json;
 
@@ -59,15 +58,14 @@ fn convert_jsonlogic_operation(
     operands: serde_json::Value,
 ) -> Result<Value, SchemeError> {
     // Helper function to extract operands as a list, ignoring arity checks
-    let extract_operand_list =
-        |operands: serde_json::Value| -> Result<Vec<Value>, SchemeError> {
-            let converted = convert_json_to_value(operands)?;
-            match converted {
-                Value::List(list) => Ok(list),
-                // If it's a single value, wrap it in a list
-                single_value => Ok(vec![single_value]),
-            }
-        };
+    let extract_operand_list = |operands: serde_json::Value| -> Result<Vec<Value>, SchemeError> {
+        let converted = convert_json_to_value(operands)?;
+        match converted {
+            Value::List(list) => Ok(list),
+            // If it's a single value, wrap it in a list
+            single_value => Ok(vec![single_value]),
+        }
+    };
 
     // Helper function to create PrecompiledOp if the operation exists
     let create_precompiled_op = |scheme_op_name: &str, args: Vec<Value>| -> Value {
@@ -111,9 +109,11 @@ fn convert_jsonlogic_operation(
         // For all other operations, look them up in the registry
         _ => {
             // Check if this operation is in the JSONLogic registry and has a builtin implementation
-            if let Some(scheme_id_and_op) = BUILTIN_OPS_JSONLOGIC.get(operator).and_then(|scheme_id| {
-                find_builtin_op_by_scheme_id(scheme_id).map(|op| (*scheme_id, op))
-            }) {
+            if let Some(scheme_id_and_op) =
+                BUILTIN_OPS_JSONLOGIC.get(operator).and_then(|scheme_id| {
+                    find_builtin_op_by_scheme_id(scheme_id).map(|op| (*scheme_id, op))
+                })
+            {
                 let (scheme_id, builtin_op) = scheme_id_and_op;
                 let args = extract_operand_list(operands)?;
 

@@ -53,22 +53,30 @@ pub enum SchemeError {
     EvalError(String),
     TypeError(String),
     UnboundVariable(String),
-    ArityError { 
-        expected: usize, 
-        got: usize, 
-        expression: Option<String>  // Optional expression context
+    ArityError {
+        expected: usize,
+        got: usize,
+        expression: Option<String>, // Optional expression context
     },
 }
 
 impl SchemeError {
     /// Create an ArityError without expression context
     pub fn arity_error(expected: usize, got: usize) -> Self {
-        SchemeError::ArityError { expected, got, expression: None }
+        SchemeError::ArityError {
+            expected,
+            got,
+            expression: None,
+        }
     }
-    
+
     /// Create an ArityError with expression context
     pub fn arity_error_with_expr(expected: usize, got: usize, expression: String) -> Self {
-        SchemeError::ArityError { expected, got, expression: Some(expression) }
+        SchemeError::ArityError {
+            expected,
+            got,
+            expression: Some(expression),
+        }
     }
 }
 
@@ -79,20 +87,22 @@ impl fmt::Display for SchemeError {
             SchemeError::EvalError(msg) => write!(f, "Evaluation error: {}", msg),
             SchemeError::TypeError(msg) => write!(f, "Type error: {}", msg),
             SchemeError::UnboundVariable(var) => write!(f, "Unbound variable: {}", var),
-            SchemeError::ArityError { expected, got, expression } => {
-                match expression {
-                    Some(expr) => write!(
-                        f,
-                        "Arity error in expression {}: expected {} arguments, got {}",
-                        expr, expected, got
-                    ),
-                    None => write!(
-                        f,
-                        "Arity error: expected {} arguments, got {}",
-                        expected, got
-                    ),
-                }
-            }
+            SchemeError::ArityError {
+                expected,
+                got,
+                expression,
+            } => match expression {
+                Some(expr) => write!(
+                    f,
+                    "Arity error in expression {}: expected {} arguments, got {}",
+                    expr, expected, got
+                ),
+                None => write!(
+                    f,
+                    "Arity error: expected {} arguments, got {}",
+                    expected, got
+                ),
+            },
         }
     }
 }

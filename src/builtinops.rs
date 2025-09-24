@@ -90,7 +90,7 @@ impl Arity {
                     Arity::Any => 0,
                 },
                 got: arg_count,
-                expression: None,  // Builtin validation doesn't have expression context
+                expression: None, // Builtin validation doesn't have expression context
             })
         }
     }

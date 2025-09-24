@@ -1,5 +1,5 @@
-use crate::builtinops::BuiltinOp;
 use crate::SchemeError;
+use crate::builtinops::BuiltinOp;
 
 /// Core value types in our Scheme interpreter
 #[derive(Debug, Clone, PartialEq)]
@@ -51,7 +51,7 @@ impl std::fmt::Display for Value {
             Value::PrecompiledOp { .. } => {
                 // Display PrecompiledOp as parseable list form for round-trip compatibility
                 write!(f, "{}", self.to_uncompiled_form())
-            },
+            }
             Value::Function { .. } => write!(f, "#<function>"),
         }
     }
@@ -70,7 +70,12 @@ impl Value {
             }
             Value::List(elements) => {
                 // Recursively convert nested elements
-                Value::List(elements.iter().map(|elem| elem.to_uncompiled_form()).collect())
+                Value::List(
+                    elements
+                        .iter()
+                        .map(|elem| elem.to_uncompiled_form())
+                        .collect(),
+                )
             }
             other => other.clone(), // Leave other types unchanged
         }

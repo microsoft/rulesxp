@@ -335,7 +335,11 @@ fn test_error_cases() {
     }
 
     match eval_fresh("(car)") {
-        Err(SchemeError::ArityError { expected, got, expression }) => {
+        Err(SchemeError::ArityError {
+            expected,
+            got,
+            expression,
+        }) => {
             assert_eq!(expected, 1);
             assert_eq!(got, 0);
             assert_eq!(expression.as_deref(), Some("(car)"));
@@ -492,7 +496,11 @@ fn test_logic_operators() {
 
     // Test error cases
     match eval_fresh("(not)") {
-        Err(SchemeError::ArityError { expected, got, expression }) => {
+        Err(SchemeError::ArityError {
+            expected,
+            got,
+            expression,
+        }) => {
             assert_eq!(expected, 1);
             assert_eq!(got, 0);
             assert_eq!(expression.as_deref(), Some("(not)"));
@@ -501,7 +509,11 @@ fn test_logic_operators() {
     }
 
     match eval_fresh("(not 1 2)") {
-        Err(SchemeError::ArityError { expected, got, expression }) => {
+        Err(SchemeError::ArityError {
+            expected,
+            got,
+            expression,
+        }) => {
             assert_eq!(expected, 1);
             assert_eq!(got, 2);
             assert_eq!(expression.as_deref(), Some("(not 1 2)"));
