@@ -45,6 +45,9 @@ pub enum Value {
         body: Box<Value>,
         env: crate::evaluator::Environment,
     },
+    /// Unspecified values (e.g., return value of define)
+    /// These values never equal themselves or any other value
+    Unspecified,
 }
 
 // From trait implementations for Value - enables .into() conversion
@@ -126,6 +129,12 @@ pub fn nil() -> Value {
     Value::List(vec![])
 }
 
+/// Helper function for creating unspecified values
+/// These are returned by operations like define that have no meaningful return value
+pub fn unspecified() -> Value {
+    Value::Unspecified
+}
+
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -149,6 +158,7 @@ impl std::fmt::Display for Value {
                 write!(f, "{}", self.to_uncompiled_form())
             }
             Value::Function { .. } => write!(f, "#<function>"),
+            Value::Unspecified => write!(f, "#<unspecified>"),
         }
     }
 }
@@ -222,7 +232,9 @@ impl PartialEq for Value {
                     env: e2,
                 },
             ) => p1 == p2 && b1 == b2 && e1 == e2,
-            _ => false, // Different variants are never equal
+            (Value::Unspecified, _) => false, // Unspecified never equals anything
+            (_, Value::Unspecified) => false, // Nothing equals Unspecified
+            _ => false,                       // Different variants are never equal
         }
     }
 }

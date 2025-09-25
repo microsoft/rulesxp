@@ -1,5 +1,5 @@
 use crate::SchemeError;
-use crate::ast::{Value, nil, sym, val};
+use crate::ast::{Value, nil, sym, unspecified, val};
 use crate::builtinops::get_builtin_ops;
 use std::collections::HashMap;
 
@@ -48,7 +48,8 @@ pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
         | Value::String(_)
         | Value::Bool(_)
         | Value::BuiltinFunction { .. }
-        | Value::Function { .. } => Ok(expr.clone()),
+        | Value::Function { .. }
+        | Value::Unspecified => Ok(expr.clone()),
 
         // Variable lookup
         Value::Symbol(name) => env
@@ -189,7 +190,7 @@ pub fn eval_define(args: &[Value], env: &mut Environment) -> Result<Value, Schem
         [Value::Symbol(name), expr] => {
             let value = eval(expr, env)?;
             env.define(name.clone(), value.clone());
-            Ok(Value::Symbol(name.clone()))
+            Ok(unspecified())
         }
         [_, _] => Err(SchemeError::TypeError(
             "define requires a symbol".to_string(),
@@ -539,7 +540,6 @@ mod tests {
             // Short-circuit evaluation - undefined variables not evaluated due to short-circuit
             ("(and #f undefined-var)", success(false)), // should not evaluate undefined-var
             ("(or #t undefined-var)", success(true)),   // should not evaluate undefined-var
-
             // === STRICT EVALUATION SEMANTICS ===
             // SCHEME-STRICT: Empty list () is NOT self-evaluating (must be quoted)
             // This is stricter than standard Scheme but more predictable
@@ -562,6 +562,23 @@ mod tests {
 
         let lookup_expr = parse("x").unwrap();
         assert_eq!(eval(&lookup_expr, &mut env).unwrap(), val(42));
+    }
+
+    #[test]
+    fn test_define_returns_unspecified() {
+        let mut env = create_global_env();
+        let define_expr = parse("(define x 42)").unwrap();
+        let result = eval(&define_expr, &mut env).unwrap();
+
+        // Define should return Unspecified
+        assert!(matches!(result, Value::Unspecified));
+
+        // Unspecified should not equal itself or any other value
+        assert_ne!(result, result);
+        assert_ne!(result, Value::Unspecified);
+        assert_ne!(result, unspecified());
+        assert_ne!(result, val(42));
+        assert_ne!(result, val(true));
     }
 
     #[test]

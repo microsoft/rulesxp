@@ -1,5 +1,6 @@
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
+use sexpr::ast::Value;
 use sexpr::evaluator;
 use sexpr::jsonlogic::{ast_to_jsonlogic, parse_jsonlogic};
 use sexpr::parser::parse as parse_scheme;
@@ -90,13 +91,16 @@ fn main() {
 
                 match result {
                     Ok(result) => {
-                        if jsonlogic_mode {
-                            match ast_to_jsonlogic(&result) {
-                                Ok(json_str) => println!("{}", json_str),
-                                Err(_) => println!("{}", result), // Fallback to S-expression if conversion fails
+                        // Don't print Unspecified values (e.g., from define)
+                        if !matches!(result, Value::Unspecified) {
+                            if jsonlogic_mode {
+                                match ast_to_jsonlogic(&result) {
+                                    Ok(json_str) => println!("{}", json_str),
+                                    Err(_) => println!("{}", result), // Fallback to S-expression if conversion fails
+                                }
+                            } else {
+                                println!("{}", result);
                             }
-                        } else {
-                            println!("{}", result);
                         }
                     }
                     Err(e) => println!("Error: {}", e),

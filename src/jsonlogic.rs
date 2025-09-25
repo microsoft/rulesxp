@@ -182,6 +182,9 @@ fn ast_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> {
         Value::Function { .. } => Err(SchemeError::EvalError(
             "Cannot convert user function to JSONLogic".to_string(),
         )),
+        Value::Unspecified => Err(SchemeError::EvalError(
+            "Cannot convert unspecified value to JSONLogic".to_string(),
+        )),
     }
 }
 
