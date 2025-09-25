@@ -50,7 +50,7 @@
 //! 5. **Add comprehensive tests** covering edge cases and error conditions
 
 use crate::SchemeError;
-use crate::ast::Value;
+use crate::ast::{Value, nil, sym, val};
 use crate::evaluator::{
     Environment, eval_and, eval_define, eval_if, eval_lambda, eval_or, eval_quote,
 };
@@ -516,24 +516,14 @@ pub fn get_builtin_ops() -> &'static [BuiltinOp] {
     BUILTIN_OPS
 }
 
-/// Find a builtin op (with function implementation) by its Scheme id
-pub fn find_builtin_op_by_scheme_id(id: &str) -> Option<&'static BuiltinOp> {
+/// Find a builtin operation by its Scheme identifier
+pub fn find_scheme_op(id: &str) -> Option<&'static BuiltinOp> {
     BUILTIN_SCHEME.get(id).copied()
 }
 
-/// Find a builtin op (with function implementation) by its JSONLogic id
-pub fn find_builtin_op_by_jsonlogic_id(id: &str) -> Option<&'static BuiltinOp> {
+/// Find a builtin operation by its JSONLogic identifier  
+pub fn find_jsonlogic_op(id: &str) -> Option<&'static BuiltinOp> {
     BUILTIN_JSONLOGIC.get(id).copied()
-}
-
-/// Get the JSONLogic operator id for a Scheme function
-///
-/// Uses the global ops registry for consistent mapping.
-pub fn map_scheme_id_to_jsonlogic_id(op: &str) -> &str {
-    BUILTIN_SCHEME
-        .get(op)
-        .map(|builtin_op| builtin_op.jsonlogic_id)
-        .unwrap_or(op)
 }
 
 #[cfg(test)]
@@ -541,572 +531,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_builtin_ops_metadata() {
-        // Test that we can find ops by both ids
-        let not_op = find_builtin_op_by_scheme_id("not").unwrap();
+    fn test_builtin_ops_registry() {
+        // Test lookup by both scheme and jsonlogic ids
+        let not_op = find_scheme_op("not").unwrap();
         assert_eq!(not_op.jsonlogic_id, "!");
         assert_eq!(not_op.arity, Arity::Exact(1));
         assert!(!not_op.is_special_form());
 
-        let not_by_jsonlogic = find_builtin_op_by_jsonlogic_id("!").unwrap();
-        // Should be the same operation
-        assert!(std::ptr::eq(not_op, not_by_jsonlogic));
+        let not_by_jsonlogic = find_jsonlogic_op("!").unwrap();
+        assert!(std::ptr::eq(not_op, not_by_jsonlogic)); // Same operation
 
-        // Test equality mapping
-        let equal_op = find_builtin_op_by_scheme_id("equal?").unwrap();
-        assert_eq!(equal_op.jsonlogic_id, "==");
-
-        let equal_by_jsonlogic = find_builtin_op_by_jsonlogic_id("==").unwrap();
-        // Should be the same operation
-        assert!(std::ptr::eq(equal_op, equal_by_jsonlogic));
-
-        // Test special forms
-        let and_op = find_builtin_op_by_scheme_id("and").unwrap();
-        assert!(and_op.is_special_form());
-
-        let if_op = find_builtin_op_by_scheme_id("if").unwrap();
-        assert!(if_op.is_special_form());
-
-        // Test arity validation
-        assert_eq!(not_op.arity, Arity::Exact(1));
-        assert_eq!(and_op.arity, Arity::AtLeast(1)); // SCHEME-STRICT: Scheme R7RS allows 0 arguments
-        assert_eq!(if_op.arity, Arity::Exact(3)); // SCHEME-JSONLOGIC-STRICT: Require exactly 3 arguments
-    }
-
-    #[test]
-    fn test_builtin_ops_registry() {
-        // Test that we can find ops with function implementations
-        let add_op = find_builtin_op_by_scheme_id("+").unwrap();
+        // Test function execution
+        let add_op = find_scheme_op("+").unwrap();
         assert_eq!(add_op.arity, Arity::AtLeast(0));
         assert!(!add_op.is_special_form());
 
-        // Test calling the function
         if let OpKind::Function(func) = &add_op.op_kind {
-            let result = func(&[Value::Number(1), Value::Number(2)]).unwrap();
-            assert_eq!(result, Value::Number(3));
+            let result = func(&[val(1), val(2)]).unwrap();
+            assert_eq!(result, val(3));
         } else {
             panic!("Expected Function variant");
         }
 
-        let not_op = find_builtin_op_by_jsonlogic_id("!").unwrap();
-        assert_eq!(not_op.jsonlogic_id, "!");
-
-        // Test calling the not function
-        if let OpKind::Function(func) = &not_op.op_kind {
-            let result = func(&[Value::Bool(true)]).unwrap();
-            assert_eq!(result, Value::Bool(false));
-        } else {
-            panic!("Expected Function variant");
-        }
-
-        // Test that special forms are now in the ops registry
-        let and_op = find_builtin_op_by_scheme_id("and").unwrap();
-        assert!(and_op.is_special_form());
-
-        let or_op = find_builtin_op_by_scheme_id("or").unwrap();
-        assert!(or_op.is_special_form());
-
-        let if_op = find_builtin_op_by_scheme_id("if").unwrap();
+        // Test special forms
+        let if_op = find_scheme_op("if").unwrap();
         assert!(if_op.is_special_form());
-    }
-
-    #[test]
-    fn test_builtin_function_implementations() {
-        // Test arithmetic functions - addition
-        assert_eq!(builtin_add(&[]).unwrap(), Value::Number(0)); // Identity
-        assert_eq!(builtin_add(&[Value::Number(5)]).unwrap(), Value::Number(5)); // Single number
-        assert_eq!(
-            builtin_add(&[Value::Number(1), Value::Number(2), Value::Number(3)]).unwrap(),
-            Value::Number(6)
-        ); // Multiple numbers
-        assert_eq!(
-            builtin_add(&[Value::Number(-5), Value::Number(10)]).unwrap(),
-            Value::Number(5)
-        ); // Negative numbers
-        assert_eq!(
-            builtin_add(&[Value::Number(0), Value::Number(0), Value::Number(0)]).unwrap(),
-            Value::Number(0)
-        ); // Zeros
-
-        // Test addition error cases
-        assert!(builtin_add(&[Value::String("not a number".to_string())]).is_err());
-        assert!(builtin_add(&[Value::Number(1), Value::Bool(true)]).is_err());
-
-        // Test arithmetic functions - subtraction
-        assert_eq!(builtin_sub(&[Value::Number(5)]).unwrap(), Value::Number(-5)); // Unary minus
-        assert_eq!(builtin_sub(&[Value::Number(-5)]).unwrap(), Value::Number(5)); // Unary minus of negative
-        assert_eq!(
-            builtin_sub(&[Value::Number(10), Value::Number(3), Value::Number(2)]).unwrap(),
-            Value::Number(5)
-        ); // Multiple subtraction
-        assert_eq!(
-            builtin_sub(&[Value::Number(0), Value::Number(5)]).unwrap(),
-            Value::Number(-5)
-        ); // Zero minus number
-        assert_eq!(
-            builtin_sub(&[Value::Number(10), Value::Number(0)]).unwrap(),
-            Value::Number(10)
-        ); // Number minus zero
-
-        // Test subtraction error cases
-        assert!(builtin_sub(&[]).is_err()); // No arguments
-        assert!(builtin_sub(&[Value::String("not a number".to_string())]).is_err());
-        assert!(builtin_sub(&[Value::Number(5), Value::Bool(false)]).is_err());
-
-        // Test arithmetic functions - multiplication
-        // SCHEME-STRICT: We require at least 1 argument (Scheme R7RS allows 0 args, returns 1)
-        assert!(builtin_mul(&[]).is_err()); // No arguments should error
-        assert_eq!(builtin_mul(&[Value::Number(5)]).unwrap(), Value::Number(5)); // Single number
-        assert_eq!(
-            builtin_mul(&[Value::Number(2), Value::Number(3), Value::Number(4)]).unwrap(),
-            Value::Number(24)
-        ); // Multiple numbers
-        assert_eq!(
-            builtin_mul(&[Value::Number(-2), Value::Number(3)]).unwrap(),
-            Value::Number(-6)
-        ); // Negative numbers
-        assert_eq!(
-            builtin_mul(&[Value::Number(0), Value::Number(100)]).unwrap(),
-            Value::Number(0)
-        ); // Zero multiplication
-        assert_eq!(
-            builtin_mul(&[Value::Number(1), Value::Number(1), Value::Number(1)]).unwrap(),
-            Value::Number(1)
-        ); // Ones
-
-        // Test multiplication error cases
-        assert!(builtin_mul(&[Value::String("not a number".to_string())]).is_err());
-        assert!(builtin_mul(&[Value::Number(2), Value::List(vec![])]).is_err());
-
-        // Test all comparison functions comprehensively
-        // Greater than
-        assert_eq!(
-            builtin_gt(&[Value::Number(5), Value::Number(3)]).unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            builtin_gt(&[Value::Number(3), Value::Number(5)]).unwrap(),
-            Value::Bool(false)
-        );
-        assert_eq!(
-            builtin_gt(&[Value::Number(5), Value::Number(5)]).unwrap(),
-            Value::Bool(false)
-        ); // Equal case
-        assert_eq!(
-            builtin_gt(&[Value::Number(-1), Value::Number(-2)]).unwrap(),
-            Value::Bool(true)
-        ); // Negative numbers
-
-        // Greater than or equal
-        assert_eq!(
-            builtin_ge(&[Value::Number(5), Value::Number(3)]).unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            builtin_ge(&[Value::Number(3), Value::Number(5)]).unwrap(),
-            Value::Bool(false)
-        );
-        assert_eq!(
-            builtin_ge(&[Value::Number(5), Value::Number(5)]).unwrap(),
-            Value::Bool(true)
-        ); // Equal case
-
-        // Less than
-        assert_eq!(
-            builtin_lt(&[Value::Number(3), Value::Number(5)]).unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            builtin_lt(&[Value::Number(5), Value::Number(3)]).unwrap(),
-            Value::Bool(false)
-        );
-        assert_eq!(
-            builtin_lt(&[Value::Number(5), Value::Number(5)]).unwrap(),
-            Value::Bool(false)
-        ); // Equal case
-
-        // Less than or equal
-        assert_eq!(
-            builtin_le(&[Value::Number(3), Value::Number(5)]).unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            builtin_le(&[Value::Number(5), Value::Number(3)]).unwrap(),
-            Value::Bool(false)
-        );
-        assert_eq!(
-            builtin_le(&[Value::Number(5), Value::Number(5)]).unwrap(),
-            Value::Bool(true)
-        ); // Equal case
-
-        // Numeric equality
-        assert_eq!(
-            builtin_eq(&[Value::Number(5), Value::Number(5)]).unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            builtin_eq(&[Value::Number(5), Value::Number(3)]).unwrap(),
-            Value::Bool(false)
-        );
-        assert_eq!(
-            builtin_eq(&[Value::Number(0), Value::Number(0)]).unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            builtin_eq(&[Value::Number(-1), Value::Number(-1)]).unwrap(),
-            Value::Bool(true)
-        );
-
-        // Test comparison error cases (wrong number of args or wrong types)
-        assert!(builtin_gt(&[Value::Number(5)]).is_err()); // Too few args
-        // Test chaining behavior: 5 > 3 > 1 should be false since 3 > 1 is true, so chain is true
-        assert_eq!(
-            builtin_gt(&[Value::Number(5), Value::Number(3), Value::Number(1)]).unwrap(),
-            Value::Bool(true)
-        );
-        // Test chaining that should fail: 5 > 3 > 4 should be false since 3 > 4 is false
-        assert_eq!(
-            builtin_gt(&[Value::Number(5), Value::Number(3), Value::Number(4)]).unwrap(),
-            Value::Bool(false)
-        );
-        assert!(builtin_gt(&[Value::String("a".to_string()), Value::Number(3)]).is_err()); // Wrong type
-
-        // Test structural equality (equal?)
-        assert_eq!(
-            builtin_equal(&[Value::Number(5), Value::Number(5)]).unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            builtin_equal(&[Value::Number(5), Value::Number(3)]).unwrap(),
-            Value::Bool(false)
-        );
-        assert_eq!(
-            builtin_equal(&[
-                Value::String("hello".to_string()),
-                Value::String("hello".to_string())
-            ])
-            .unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            builtin_equal(&[
-                Value::String("hello".to_string()),
-                Value::String("world".to_string())
-            ])
-            .unwrap(),
-            Value::Bool(false)
-        );
-        assert_eq!(
-            builtin_equal(&[Value::Bool(true), Value::Bool(true)]).unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            builtin_equal(&[Value::Bool(true), Value::Bool(false)]).unwrap(),
-            Value::Bool(false)
-        );
-        assert_eq!(
-            builtin_equal(&[Value::List(vec![]), Value::List(vec![])]).unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            builtin_equal(&[
-                Value::List(vec![Value::Number(1)]),
-                Value::List(vec![Value::Number(1)])
-            ])
-            .unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            builtin_equal(&[Value::Number(5), Value::String("5".to_string())]).unwrap(),
-            Value::Bool(false)
-        ); // Different types
-
-        // Test equal? error cases
-        assert!(builtin_equal(&[Value::Number(5)]).is_err()); // Too few args
-        assert!(builtin_equal(&[Value::Number(5), Value::Number(3), Value::Number(1)]).is_err()); // Too many args
-
-        // Test numeric comparison chaining
-        assert_eq!(
-            builtin_lt(&[Value::Number(1), Value::Number(2), Value::Number(3)]).unwrap(),
-            Value::Bool(true)
-        ); // 1 < 2 < 3
-        assert_eq!(
-            builtin_lt(&[Value::Number(1), Value::Number(3), Value::Number(2)]).unwrap(),
-            Value::Bool(false)
-        ); // 1 < 3 but not 3 < 2
-        assert_eq!(
-            builtin_eq(&[Value::Number(5), Value::Number(5), Value::Number(5)]).unwrap(),
-            Value::Bool(true)
-        ); // 5 = 5 = 5
-        assert_eq!(
-            builtin_eq(&[Value::Number(5), Value::Number(5), Value::Number(3)]).unwrap(),
-            Value::Bool(false)
-        ); // 5 = 5 but not 5 = 3
-
-        // Test logical functions - not
-        assert_eq!(
-            builtin_not(&[Value::Bool(true)]).unwrap(),
-            Value::Bool(false)
-        );
-        assert_eq!(
-            builtin_not(&[Value::Bool(false)]).unwrap(),
-            Value::Bool(true)
-        );
-
-        // Test not error cases
-        assert!(builtin_not(&[]).is_err()); // No args
-        assert!(builtin_not(&[Value::Bool(true), Value::Bool(false)]).is_err()); // Too many args
-        assert!(builtin_not(&[Value::Number(1)]).is_err()); // Wrong type
-        assert!(builtin_not(&[Value::String("true".to_string())]).is_err()); // Wrong type
-
-        // Test list functions - car
-        let list = Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]);
-        assert_eq!(builtin_car(&[list.clone()]).unwrap(), Value::Number(1));
-        let single_elem_list = Value::List(vec![Value::String("only".to_string())]);
-        assert_eq!(
-            builtin_car(&[single_elem_list]).unwrap(),
-            Value::String("only".to_string())
-        );
-        let nested_list = Value::List(vec![Value::List(vec![Value::Number(1)]), Value::Number(2)]);
-        assert_eq!(
-            builtin_car(&[nested_list]).unwrap(),
-            Value::List(vec![Value::Number(1)])
-        );
-
-        // Test car error cases
-        assert!(builtin_car(&[]).is_err()); // No args
-        assert!(builtin_car(&[list.clone(), list.clone()]).is_err()); // Too many args
-        assert!(builtin_car(&[Value::List(vec![])]).is_err()); // Empty list
-        assert!(builtin_car(&[Value::Number(42)]).is_err()); // Not a list
-        assert!(builtin_car(&[Value::String("not a list".to_string())]).is_err()); // Not a list
-
-        // Test list functions - cdr
-        let list = Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]);
-        assert_eq!(
-            builtin_cdr(&[list.clone()]).unwrap(),
-            Value::List(vec![Value::Number(2), Value::Number(3)])
-        );
-        let single_elem_list = Value::List(vec![Value::String("only".to_string())]);
-        assert_eq!(
-            builtin_cdr(&[single_elem_list]).unwrap(),
-            Value::List(vec![])
-        );
-        let two_elem_list = Value::List(vec![Value::Number(1), Value::Number(2)]);
-        assert_eq!(
-            builtin_cdr(&[two_elem_list]).unwrap(),
-            Value::List(vec![Value::Number(2)])
-        );
-
-        // Test cdr error cases
-        assert!(builtin_cdr(&[]).is_err()); // No args
-        assert!(builtin_cdr(&[list.clone(), list.clone()]).is_err()); // Too many args
-        assert!(builtin_cdr(&[Value::List(vec![])]).is_err()); // Empty list
-        assert!(builtin_cdr(&[Value::Bool(true)]).is_err()); // Not a list
-
-        // Test list functions - cons
-        let new_list = builtin_cons(&[
-            Value::Number(0),
-            Value::List(vec![Value::Number(1), Value::Number(2)]),
-        ])
-        .unwrap();
-        assert_eq!(
-            new_list,
-            Value::List(vec![Value::Number(0), Value::Number(1), Value::Number(2)])
-        );
-        let cons_to_empty =
-            builtin_cons(&[Value::String("first".to_string()), Value::List(vec![])]).unwrap();
-        assert_eq!(
-            cons_to_empty,
-            Value::List(vec![Value::String("first".to_string())])
-        );
-        let cons_nested = builtin_cons(&[
-            Value::List(vec![Value::Number(1)]),
-            Value::List(vec![Value::Number(2)]),
-        ])
-        .unwrap();
-        assert_eq!(
-            cons_nested,
-            Value::List(vec![Value::List(vec![Value::Number(1)]), Value::Number(2)])
-        );
-
-        // Test cons error cases
-        assert!(builtin_cons(&[]).is_err()); // No args
-        assert!(builtin_cons(&[Value::Number(1)]).is_err()); // Too few args
-        assert!(builtin_cons(&[Value::Number(1), Value::Number(2), Value::Number(3)]).is_err()); // Too many args
-        assert!(builtin_cons(&[Value::Number(1), Value::Number(2)]).is_err()); // Second arg not a list
-        assert!(
-            builtin_cons(&[Value::Number(1), Value::String("not a list".to_string())]).is_err()
-        ); // Second arg not a list
-
-        // Test list functions - list
-        assert_eq!(builtin_list(&[]).unwrap(), Value::List(vec![])); // Empty list
-        assert_eq!(
-            builtin_list(&[Value::Number(1)]).unwrap(),
-            Value::List(vec![Value::Number(1)])
-        ); // Single element
-        assert_eq!(
-            builtin_list(&[
-                Value::Number(1),
-                Value::String("hello".to_string()),
-                Value::Bool(true)
-            ])
-            .unwrap(),
-            Value::List(vec![
-                Value::Number(1),
-                Value::String("hello".to_string()),
-                Value::Bool(true)
-            ])
-        ); // Mixed types
-        let nested =
-            builtin_list(&[Value::List(vec![Value::Number(1)]), Value::Number(2)]).unwrap();
-        assert_eq!(
-            nested,
-            Value::List(vec![Value::List(vec![Value::Number(1)]), Value::Number(2)])
-        ); // Nested lists
-
-        // Test null? function
-        assert_eq!(
-            builtin_null(&[Value::List(vec![])]).unwrap(),
-            Value::Bool(true)
-        ); // Empty list is nil
-        assert_eq!(
-            builtin_null(&[Value::Number(42)]).unwrap(),
-            Value::Bool(false)
-        ); // Number is not nil
-        assert_eq!(
-            builtin_null(&[Value::String("".to_string())]).unwrap(),
-            Value::Bool(false)
-        ); // Empty string is not nil
-        assert_eq!(
-            builtin_null(&[Value::Bool(false)]).unwrap(),
-            Value::Bool(false)
-        ); // False is not nil
-        assert_eq!(
-            builtin_null(&[Value::List(vec![Value::Number(1)])]).unwrap(),
-            Value::Bool(false)
-        ); // Non-empty list is not nil
-
-        // Test null? error cases
-        assert!(builtin_null(&[]).is_err()); // No args
-        assert!(builtin_null(&[Value::Number(1), Value::Number(2)]).is_err()); // Too many args
-
-        // Test error function
-        assert!(builtin_error(&[]).is_err()); // No args - should produce generic error
-        assert!(builtin_error(&[Value::String("test error".to_string())]).is_err()); // String message
-        assert!(builtin_error(&[Value::Number(42)]).is_err()); // Number message  
-        assert!(builtin_error(&[Value::Bool(true)]).is_err()); // Bool message
-        assert!(
-            builtin_error(&[
-                Value::String("Error:".to_string()),
-                Value::String("Something went wrong".to_string())
-            ])
-            .is_err()
-        ); // Multiple args
-
-        // Verify error messages are constructed correctly
-        match builtin_error(&[Value::String("test message".to_string())]) {
-            Err(SchemeError::EvalError(msg)) => assert_eq!(msg, "test message"),
-            _ => panic!("Expected EvalError with specific message"),
-        }
-
-        match builtin_error(&[Value::String("Error:".to_string()), Value::Number(404)]) {
-            Err(SchemeError::EvalError(msg)) => assert_eq!(msg, "Error: 404"),
-            _ => panic!("Expected EvalError with concatenated message"),
-        }
-    }
-
-    #[test]
-    fn test_mapping_functions() {
-        // Test JSONLogic to Scheme mapping using direct lookup
-        assert_eq!(
-            find_builtin_op_by_jsonlogic_id("!").unwrap().scheme_id,
-            "not"
-        );
-        assert_eq!(
-            find_builtin_op_by_jsonlogic_id("==").unwrap().scheme_id,
-            "equal?"
-        );
-        assert_eq!(find_builtin_op_by_jsonlogic_id("+").unwrap().scheme_id, "+");
-
-        // Test Scheme to JSONLogic mapping using the registry
-        assert_eq!(map_scheme_id_to_jsonlogic_id("not"), "!");
-        assert_eq!(map_scheme_id_to_jsonlogic_id("equal?"), "==");
-        assert_eq!(map_scheme_id_to_jsonlogic_id("+"), "+"); // Same in both
-        assert_eq!(map_scheme_id_to_jsonlogic_id("unknown"), "unknown"); // Fallback
-
-        // Test expanded mappings - arithmetic operations
-        assert_eq!(find_builtin_op_by_jsonlogic_id("-").unwrap().scheme_id, "-");
-        assert_eq!(find_builtin_op_by_jsonlogic_id("*").unwrap().scheme_id, "*");
-        assert_eq!(find_builtin_op_by_jsonlogic_id(">").unwrap().scheme_id, ">");
-
-        // Test shared control flow operations (no prefix)
-        assert_eq!(
-            find_builtin_op_by_jsonlogic_id("and").unwrap().scheme_id,
-            "and"
-        );
-        assert_eq!(
-            find_builtin_op_by_jsonlogic_id("or").unwrap().scheme_id,
-            "or"
-        );
-        assert_eq!(
-            find_builtin_op_by_jsonlogic_id("if").unwrap().scheme_id,
-            "if"
-        );
-
-        // Test Scheme-specific operations with prefixes
-        assert_eq!(
-            find_builtin_op_by_jsonlogic_id("scheme-car")
-                .unwrap()
-                .scheme_id,
-            "car"
-        );
-        assert_eq!(
-            find_builtin_op_by_jsonlogic_id("scheme-numeric-equals")
-                .unwrap()
-                .scheme_id,
-            "="
-        );
-    }
-
-    #[test]
-    fn test_lookup_functions() {
-        // Test builtin detection by scheme id
-        assert!(find_builtin_op_by_scheme_id("+").is_some());
-        assert!(find_builtin_op_by_scheme_id("not").is_some());
-        assert!(find_builtin_op_by_scheme_id("equal?").is_some());
-        assert!(find_builtin_op_by_scheme_id("unknown").is_none());
-
-        // Test builtin detection by jsonlogic id
-        assert!(find_builtin_op_by_jsonlogic_id("!").is_some());
-        assert!(find_builtin_op_by_jsonlogic_id("==").is_some());
-        assert!(find_builtin_op_by_jsonlogic_id("unknown").is_none());
-
-        // Test special form detection using available functions
-        assert!(
-            find_builtin_op_by_scheme_id("and")
-                .map(|op| op.is_special_form())
-                .unwrap_or(false)
-        );
-        assert!(
-            find_builtin_op_by_scheme_id("or")
-                .map(|op| op.is_special_form())
-                .unwrap_or(false)
-        );
-        assert!(
-            find_builtin_op_by_scheme_id("if")
-                .map(|op| op.is_special_form())
-                .unwrap_or(false)
-        );
-        assert!(
-            find_builtin_op_by_scheme_id("not")
-                .map(|op| !op.is_special_form())
-                .unwrap_or(true)
-        );
-        assert!(
-            find_builtin_op_by_scheme_id("+")
-                .map(|op| !op.is_special_form())
-                .unwrap_or(true)
-        );
+        assert_eq!(if_op.arity, Arity::Exact(3));
 
         // Test that get_builtin_ops returns all operations
         let all_ops = get_builtin_ops();
@@ -1117,38 +567,254 @@ mod tests {
         assert!(add_op.is_some());
         assert!(!add_op.unwrap().is_special_form());
 
-        let and_op = all_ops.iter().find(|op| op.scheme_id == "and");
-        assert!(and_op.is_some());
-        assert!(and_op.unwrap().is_special_form());
+        let quote_op = all_ops.iter().find(|op| op.scheme_id == "quote");
+        assert!(quote_op.is_some());
+        assert!(quote_op.unwrap().is_special_form());
+
+        // Test unknown operations return None
+        assert!(find_scheme_op("unknown").is_none());
+        assert!(find_jsonlogic_op("unknown").is_none());
+
+        // Test operator mappings
+        // JSONLogic to Scheme mapping
+        assert_eq!(find_jsonlogic_op("!").unwrap().scheme_id, "not");
+        assert_eq!(find_jsonlogic_op("==").unwrap().scheme_id, "equal?");
+        assert_eq!(find_jsonlogic_op("+").unwrap().scheme_id, "+");
+
+        // Scheme to JSONLogic mapping (test inline conversion)
+        assert_eq!(find_scheme_op("not").unwrap().jsonlogic_id, "!");
+        assert_eq!(find_scheme_op("equal?").unwrap().jsonlogic_id, "==");
+        assert_eq!(find_scheme_op("+").unwrap().jsonlogic_id, "+"); // Same in both
+
+        // Test arithmetic operations
+        assert_eq!(find_jsonlogic_op("-").unwrap().scheme_id, "-");
+        assert_eq!(find_jsonlogic_op("*").unwrap().scheme_id, "*");
+        assert_eq!(find_jsonlogic_op(">").unwrap().scheme_id, ">");
+
+        // Test control flow operations (no prefix)
+        assert_eq!(find_jsonlogic_op("and").unwrap().scheme_id, "and");
+        assert_eq!(find_jsonlogic_op("or").unwrap().scheme_id, "or");
+        assert_eq!(find_jsonlogic_op("if").unwrap().scheme_id, "if");
+
+        // Test Scheme-specific operations with prefixes
+        assert_eq!(find_jsonlogic_op("scheme-car").unwrap().scheme_id, "car");
+        assert_eq!(
+            find_jsonlogic_op("scheme-numeric-equals")
+                .unwrap()
+                .scheme_id,
+            "="
+        );
+    }
+
+    #[test]
+    fn test_builtin_function_implementations() {
+        // Pre-declare list for tests that need variable reuse
+        let int_list = val([1, 2, 3]);
+
+        let test_cases = [
+            // Test arithmetic functions - addition
+            (builtin_add(&[]), Some(val(0))),       // Identity
+            (builtin_add(&[val(5)]), Some(val(5))), // Single number
+            (builtin_add(&[val(1), val(2), val(3)]), Some(val(6))), // Multiple numbers
+            (builtin_add(&[val(-5), val(10)]), Some(val(5))), // Negative numbers
+            (builtin_add(&[val(0), val(0), val(0)]), Some(val(0))), // Zeros
+            // Test addition error cases
+            (builtin_add(&[val("not a number")]), None), // Invalid type
+            (builtin_add(&[val(1), val(true)]), None),   // Mixed types
+            // Test arithmetic functions - subtraction
+            (builtin_sub(&[val(5)]), Some(val(-5))), // Unary minus
+            (builtin_sub(&[val(-5)]), Some(val(5))), // Unary minus of negative
+            (builtin_sub(&[val(10), val(3), val(2)]), Some(val(5))), // Multiple subtraction
+            (builtin_sub(&[val(0), val(5)]), Some(val(-5))), // Zero minus number
+            (builtin_sub(&[val(10), val(0)]), Some(val(10))), // Number minus zero
+            // Test subtraction error cases
+            (builtin_sub(&[]), None), // No arguments
+            (builtin_sub(&[val("not a number")]), None),
+            (builtin_sub(&[val(5), val(false)]), None),
+            // Test arithmetic functions - multiplication
+            // SCHEME-STRICT: We require at least 1 argument (Scheme R7RS allows 0 args, returns 1)
+            (builtin_mul(&[]), None), // No arguments should error
+            (builtin_mul(&[val(5)]), Some(val(5))), // Single number
+            (builtin_mul(&[val(2), val(3), val(4)]), Some(val(24))), // Multiple numbers
+            (builtin_mul(&[val(-2), val(3)]), Some(val(-6))), // Negative numbers
+            (builtin_mul(&[val(0), val(100)]), Some(val(0))), // Zero multiplication
+            (builtin_mul(&[val(1), val(1), val(1)]), Some(val(1))), // Ones
+            // Test multiplication error cases
+            (builtin_mul(&[val("not a number")]), None),
+            (builtin_mul(&[val(2), nil()]), None),
+            // Test comparison functions - greater than
+            (builtin_gt(&[val(5), val(3)]), Some(val(true))),
+            (builtin_gt(&[val(3), val(5)]), Some(val(false))),
+            (builtin_gt(&[val(5), val(5)]), Some(val(false))), // Equal case
+            (builtin_gt(&[val(-1), val(-2)]), Some(val(true))), // Negative numbers
+            // Test chaining behavior: 5 > 3 > 1 should be true since all adjacent pairs satisfy >
+            (builtin_gt(&[val(5), val(3), val(1)]), Some(val(true))), // Chaining true
+            // Test chaining that should fail: 5 > 3 > 4 should be false since 3 > 4 is false
+            (builtin_gt(&[val(5), val(3), val(4)]), Some(val(false))), // Chaining false
+            // Test comparison error cases (wrong number of args or wrong types)
+            (builtin_gt(&[val(5)]), None),           // Too few args
+            (builtin_gt(&[val("a"), val(3)]), None), // Wrong type
+            // Test comparison functions - greater than or equal
+            (builtin_ge(&[val(5), val(3)]), Some(val(true))),
+            (builtin_ge(&[val(3), val(5)]), Some(val(false))),
+            (builtin_ge(&[val(5), val(5)]), Some(val(true))), // Equal case
+            // Test comparison functions - less than
+            (builtin_lt(&[val(3), val(5)]), Some(val(true))),
+            (builtin_lt(&[val(5), val(3)]), Some(val(false))),
+            (builtin_lt(&[val(5), val(5)]), Some(val(false))), // Equal case
+            // Test numeric comparison chaining: 1 < 2 < 3 (all adjacent pairs satisfy <)
+            (builtin_lt(&[val(1), val(2), val(3)]), Some(val(true))), // Chaining true
+            // Test chaining that should fail: 1 < 3 but not 3 < 2
+            (builtin_lt(&[val(1), val(3), val(2)]), Some(val(false))), // Chaining false
+            // Test comparison functions - less than or equal
+            (builtin_le(&[val(3), val(5)]), Some(val(true))),
+            (builtin_le(&[val(5), val(3)]), Some(val(false))),
+            (builtin_le(&[val(5), val(5)]), Some(val(true))), // Equal case
+            // Test numeric equality
+            (builtin_eq(&[val(5), val(5)]), Some(val(true))),
+            (builtin_eq(&[val(5), val(3)]), Some(val(false))),
+            (builtin_eq(&[val(0), val(0)]), Some(val(true))),
+            (builtin_eq(&[val(-1), val(-1)]), Some(val(true))),
+            (builtin_eq(&[val(5), val(5), val(5)]), Some(val(true))), // 5 = 5 = 5 (all equal)
+            (builtin_eq(&[val(5), val(5), val(3)]), Some(val(false))), // 5 = 5 but not 5 = 3
+            // Test structural equality (equal?)
+            (builtin_equal(&[val(5), val(5)]), Some(val(true))),
+            (builtin_equal(&[val(5), val(3)]), Some(val(false))),
+            (
+                builtin_equal(&[val("hello"), val("hello")]),
+                Some(val(true)),
+            ),
+            (
+                builtin_equal(&[val("hello"), val("world")]),
+                Some(val(false)),
+            ),
+            (builtin_equal(&[val(true), val(true)]), Some(val(true))),
+            (builtin_equal(&[val(true), val(false)]), Some(val(false))),
+            (builtin_equal(&[nil(), nil()]), Some(val(true))),
+            (builtin_equal(&[val([1]), val([1])]), Some(val(true))),
+            (builtin_equal(&[val(5), val("5")]), Some(val(false))), // Different types
+            // Test equal? error cases (structural equality requires exactly 2 args)
+            (builtin_equal(&[val(5)]), None), // Too few args
+            (builtin_equal(&[val(5), val(3), val(1)]), None), // Too many args
+            // Test logical functions - not
+            (builtin_not(&[val(true)]), Some(val(false))),
+            (builtin_not(&[val(false)]), Some(val(true))),
+            // Test not error cases
+            (builtin_not(&[]), None),                      // No args
+            (builtin_not(&[val(true), val(false)]), None), // Too many args
+            (builtin_not(&[val(1)]), None),                // Wrong type
+            (builtin_not(&[val("true")]), None),           // Wrong type
+            // Test list functions - car
+            (builtin_car(&[val([1, 2, 3])]), Some(val(1))), // First element
+            (builtin_car(&[val(["only"])]), Some(val("only"))), // Single element
+            (builtin_car(&[val([val([1]), val(2)])]), Some(val([1]))), // Nested list
+            // Test car error cases
+            (builtin_car(&[]), None), // No args
+            (builtin_car(&[int_list.clone(), int_list.clone()]), None), // Too many args
+            (builtin_car(&[nil()]), None), // Empty list
+            (builtin_car(&[val(42)]), None), // Not a list
+            (builtin_car(&[val("not a list")]), None), // Not a list
+            // Test list functions - cdr
+            (builtin_cdr(&[val([1, 2, 3])]), Some(val([2, 3]))), // Rest of list
+            (builtin_cdr(&[val(["only"])]), Some(nil())),        // Single element -> empty
+            (builtin_cdr(&[val([1, 2])]), Some(val([2]))),       // Two elements
+            // Test cdr error cases
+            (builtin_cdr(&[]), None), // No args
+            (builtin_cdr(&[int_list.clone(), int_list.clone()]), None), // Too many args
+            (builtin_cdr(&[nil()]), None), // Empty list
+            (builtin_cdr(&[val(true)]), None), // Not a list
+            // Test list functions - cons
+            (builtin_cons(&[val(0), val([1, 2])]), Some(val([0, 1, 2]))), // Prepend to list
+            (builtin_cons(&[val("first"), nil()]), Some(val(["first"]))), // Cons to empty
+            (
+                builtin_cons(&[val([1]), val([2])]),
+                Some(val([val([1]), val(2)])),
+            ), // Nested cons
+            // Test cons error cases
+            (builtin_cons(&[]), None),                          // No args
+            (builtin_cons(&[val(1)]), None),                    // Too few args
+            (builtin_cons(&[val(1), val(2), val(3)]), None),    // Too many args
+            (builtin_cons(&[val(1), val(2)]), None),            // Second arg not a list
+            (builtin_cons(&[val(1), val("not a list")]), None), // Second arg not a list
+            // Test list functions - list
+            (builtin_list(&[]), Some(nil())),          // Empty list
+            (builtin_list(&[val(1)]), Some(val([1]))), // Single element
+            (
+                builtin_list(&[val(1), val("hello"), val(true)]),
+                Some(val([val(1), val("hello"), val(true)])),
+            ), // Mixed types
+            (
+                builtin_list(&[val([1]), val(2)]),
+                Some(val([val([1]), val(2)])),
+            ), // Nested lists
+            // Test null? function
+            (builtin_null(&[nil()]), Some(val(true))), // Empty list is nil
+            (builtin_null(&[val(42)]), Some(val(false))), // Number is not nil
+            (builtin_null(&[val("")]), Some(val(false))), // Empty string is not nil
+            (builtin_null(&[val(false)]), Some(val(false))), // False is not nil
+            (builtin_null(&[val([1])]), Some(val(false))), // Non-empty list is not nil
+            // Test null? error cases
+            (builtin_null(&[]), None),               // No args
+            (builtin_null(&[val(1), val(2)]), None), // Too many args
+            // Test error function
+            (builtin_error(&[]), None), // No args - should produce generic error
+            (builtin_error(&[val("test error")]), None), // String message
+            (builtin_error(&[val(42)]), None), // Number message
+            (builtin_error(&[val(true)]), None), // Bool message
+            (
+                builtin_error(&[val("Error:"), val("Something went wrong")]),
+                None,
+            ), // Multiple args
+        ];
+
+        for (expression, expected_result) in test_cases {
+            match expression {
+                Ok(result) => assert_eq!(Some(result), expected_result),
+                Err(_) => assert_eq!(expected_result, None),
+            }
+        }
+
+        // Verify error messages are constructed correctly (can't be in array because needs specific match)
+        match builtin_error(&[val("test message")]).unwrap_err() {
+            SchemeError::EvalError(msg) => assert_eq!(msg, "test message"),
+            _ => panic!("Expected EvalError with specific message"),
+        }
+
+        match builtin_error(&[val("Error:"), val(404)]).unwrap_err() {
+            SchemeError::EvalError(msg) => assert_eq!(msg, "Error: 404"),
+            _ => panic!("Expected EvalError with concatenated message"),
+        }
     }
 
     #[test]
     fn test_arity_validation() {
-        // Test Arity::Exact validation
-        assert!(Arity::Exact(2).validate(2).is_ok());
-        assert!(Arity::Exact(2).validate(1).is_err());
-        assert!(Arity::Exact(2).validate(3).is_err());
+        use Arity::*;
 
-        // Test Arity::AtLeast validation
-        assert!(Arity::AtLeast(1).validate(1).is_ok());
-        assert!(Arity::AtLeast(1).validate(2).is_ok());
-        assert!(Arity::AtLeast(1).validate(0).is_err());
+        // Test Exact validation
+        Exact(2).validate(2).unwrap();
+        Exact(2).validate(1).unwrap_err();
+        Exact(2).validate(3).unwrap_err();
 
-        // Test Arity::Range validation
-        assert!(Arity::Range(1, 3).validate(1).is_ok());
-        assert!(Arity::Range(1, 3).validate(2).is_ok());
-        assert!(Arity::Range(1, 3).validate(3).is_ok());
-        assert!(Arity::Range(1, 3).validate(0).is_err());
-        assert!(Arity::Range(1, 3).validate(4).is_err());
+        // Test AtLeast validation
+        AtLeast(1).validate(1).unwrap();
+        AtLeast(1).validate(2).unwrap();
+        AtLeast(1).validate(0).unwrap_err();
 
-        // Test Arity::Any validation
-        assert!(Arity::Any.validate(0).is_ok());
-        assert!(Arity::Any.validate(1).is_ok());
-        assert!(Arity::Any.validate(100).is_ok());
+        // Test Range validation
+        Range(1, 3).validate(1).unwrap();
+        Range(1, 3).validate(2).unwrap();
+        Range(1, 3).validate(3).unwrap();
+        Range(1, 3).validate(0).unwrap_err();
+        Range(1, 3).validate(4).unwrap_err();
+
+        // Test Any validation
+        Any.validate(0).unwrap();
+        Any.validate(1).unwrap();
+        Any.validate(100).unwrap();
 
         // Test error messages
-        match Arity::Exact(2).validate(1) {
-            Err(SchemeError::ArityError { expected, got, .. }) => {
+        match Exact(2).validate(1).unwrap_err() {
+            SchemeError::ArityError { expected, got, .. } => {
                 assert_eq!(expected, 2);
                 assert_eq!(got, 1);
             }

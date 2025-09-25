@@ -10,8 +10,8 @@ use nom::{
 };
 
 use crate::SchemeError;
-use crate::ast::Value;
-use crate::builtinops::find_builtin_op_by_scheme_id;
+use crate::ast::{Value, nil, sym, val};
+use crate::builtinops::find_scheme_op;
 
 /// Control whether builtin operations should be precompiled during parsing
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -159,7 +159,7 @@ fn parse_list(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&s
 
         // If precompilation is enabled, create a PrecompiledOp
         if should_precompile == ShouldPrecompileOps::Yes {
-            if let Some(builtin_op) = find_builtin_op_by_scheme_id("quote") {
+            if let Some(builtin_op) = find_scheme_op("quote") {
                 return Ok((
                     input,
                     Value::PrecompiledOp {
@@ -189,7 +189,7 @@ fn parse_list(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&s
     // Apply precompilation if enabled - single lookup, no repeated string comparison
     if should_precompile == ShouldPrecompileOps::Yes && !elements.is_empty() {
         if let Value::Symbol(op_name) = &elements[0] {
-            if let Some(builtin_op) = find_builtin_op_by_scheme_id(op_name.as_str()) {
+            if let Some(builtin_op) = find_scheme_op(op_name.as_str()) {
                 let args = elements[1..].to_vec();
                 return Ok((
                     input,
@@ -228,7 +228,7 @@ fn parse_quote(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&
 
     // Create PrecompiledOp only if precompilation is enabled
     if should_precompile == ShouldPrecompileOps::Yes {
-        if let Some(builtin_op) = find_builtin_op_by_scheme_id("quote") {
+        if let Some(builtin_op) = find_scheme_op("quote") {
             return Ok((
                 input,
                 Value::PrecompiledOp {
@@ -309,27 +309,27 @@ mod tests {
     #[test]
     fn test_parse_number() {
         // Decimal numbers
-        assert_eq!(parse("42").unwrap(), Value::Number(42));
-        assert_eq!(parse("-5").unwrap(), Value::Number(-5));
-        assert_eq!(parse("0").unwrap(), Value::Number(0));
-        assert_eq!(parse("-0").unwrap(), Value::Number(0));
+        assert_eq!(parse("42").unwrap(), val(42));
+        assert_eq!(parse("-5").unwrap(), val(-5));
+        assert_eq!(parse("0").unwrap(), val(0));
+        assert_eq!(parse("-0").unwrap(), val(0));
 
         // Hexadecimal numbers
-        assert_eq!(parse("#x1A").unwrap(), Value::Number(26));
-        assert_eq!(parse("#X1a").unwrap(), Value::Number(26));
-        assert_eq!(parse("#xff").unwrap(), Value::Number(255));
-        assert_eq!(parse("#xFF").unwrap(), Value::Number(255));
-        assert_eq!(parse("#x0").unwrap(), Value::Number(0));
-        assert_eq!(parse("#x12345").unwrap(), Value::Number(74565));
+        assert_eq!(parse("#x1A").unwrap(), val(26));
+        assert_eq!(parse("#X1a").unwrap(), val(26));
+        assert_eq!(parse("#xff").unwrap(), val(255));
+        assert_eq!(parse("#xFF").unwrap(), val(255));
+        assert_eq!(parse("#x0").unwrap(), val(0));
+        assert_eq!(parse("#x12345").unwrap(), val(74565));
 
-        // Edge cases
+        // Edge cases - large integer literals
         assert_eq!(
             parse("9223372036854775807").unwrap(),
-            Value::Number(i64::MAX)
+            val(9223372036854775807i64)
         ); // max i64
         assert_eq!(
             parse("-9223372036854775808").unwrap(),
-            Value::Number(i64::MIN)
+            val(-9223372036854775808i64)
         ); // min i64
 
         // Should fail
@@ -349,53 +349,23 @@ mod tests {
 
     #[test]
     fn test_parse_symbol() {
-        assert_eq!(parse("foo").unwrap(), Value::Symbol("foo".to_string()));
-        assert_eq!(parse("+").unwrap(), Value::Symbol("+".to_string()));
-        assert_eq!(parse(">=").unwrap(), Value::Symbol(">=".to_string()));
+        assert_eq!(parse("foo").unwrap(), sym("foo"));
+        assert_eq!(parse("+").unwrap(), sym("+"));
+        assert_eq!(parse(">=").unwrap(), sym(">="));
 
         // Test all allowed special characters
-        assert_eq!(
-            parse("test-name").unwrap(),
-            Value::Symbol("test-name".to_string())
-        );
-        assert_eq!(
-            parse("test*name").unwrap(),
-            Value::Symbol("test*name".to_string())
-        );
-        assert_eq!(
-            parse("test/name").unwrap(),
-            Value::Symbol("test/name".to_string())
-        );
-        assert_eq!(
-            parse("test<name").unwrap(),
-            Value::Symbol("test<name".to_string())
-        );
-        assert_eq!(
-            parse("test=name").unwrap(),
-            Value::Symbol("test=name".to_string())
-        );
-        assert_eq!(
-            parse("test>name").unwrap(),
-            Value::Symbol("test>name".to_string())
-        );
-        assert_eq!(
-            parse("test!name").unwrap(),
-            Value::Symbol("test!name".to_string())
-        );
-        assert_eq!(
-            parse("test?name").unwrap(),
-            Value::Symbol("test?name".to_string())
-        );
-        assert_eq!(
-            parse("test_name").unwrap(),
-            Value::Symbol("test_name".to_string())
-        );
+        assert_eq!(parse("test-name").unwrap(), sym("test-name"));
+        assert_eq!(parse("test*name").unwrap(), sym("test*name"));
+        assert_eq!(parse("test/name").unwrap(), sym("test/name"));
+        assert_eq!(parse("test<name").unwrap(), sym("test<name"));
+        assert_eq!(parse("test=name").unwrap(), sym("test=name"));
+        assert_eq!(parse("test>name").unwrap(), sym("test>name"));
+        assert_eq!(parse("test!name").unwrap(), sym("test!name"));
+        assert_eq!(parse("test?name").unwrap(), sym("test?name"));
+        assert_eq!(parse("test_name").unwrap(), sym("test_name"));
 
         // Alphanumeric combinations - but note that numbers at start will parse as numbers first
-        assert_eq!(
-            parse("var123").unwrap(),
-            Value::Symbol("var123".to_string())
-        );
+        assert_eq!(parse("var123").unwrap(), sym("var123"));
 
         // This will parse as a number "123" with remaining "var", causing a parse error
         assert!(parse("123var").is_err());
@@ -403,8 +373,8 @@ mod tests {
 
     #[test]
     fn test_parse_bool() {
-        assert_eq!(parse("#t").unwrap(), Value::Bool(true));
-        assert_eq!(parse("#f").unwrap(), Value::Bool(false));
+        assert_eq!(parse("#t").unwrap(), val(true));
+        assert_eq!(parse("#f").unwrap(), val(false));
 
         // Should fail - case sensitive
         assert!(parse("#T").is_err());
@@ -415,45 +385,27 @@ mod tests {
 
     #[test]
     fn test_parse_string() {
-        assert_eq!(
-            parse("\"hello\"").unwrap(),
-            Value::String("hello".to_string())
-        );
-        assert_eq!(
-            parse("\"hello world\"").unwrap(),
-            Value::String("hello world".to_string())
-        );
+        assert_eq!(parse("\"hello\"").unwrap(), val("hello"));
+        assert_eq!(parse("\"hello world\"").unwrap(), val("hello world"));
 
         // Test escape sequences
-        assert_eq!(
-            parse("\"hello\\nworld\"").unwrap(),
-            Value::String("hello\nworld".to_string())
-        );
-        assert_eq!(
-            parse("\"tab\\there\"").unwrap(),
-            Value::String("tab\there".to_string())
-        );
+        assert_eq!(parse("\"hello\\nworld\"").unwrap(), val("hello\nworld"));
+        assert_eq!(parse("\"tab\\there\"").unwrap(), val("tab\there"));
         assert_eq!(
             parse("\"carriage\\rreturn\"").unwrap(),
-            Value::String("carriage\rreturn".to_string())
+            val("carriage\rreturn")
         );
-        assert_eq!(
-            parse("\"quote\\\"test\"").unwrap(),
-            Value::String("quote\"test".to_string())
-        );
+        assert_eq!(parse("\"quote\\\"test\"").unwrap(), val("quote\"test"));
         assert_eq!(
             parse("\"backslash\\\\test\"").unwrap(),
-            Value::String("backslash\\test".to_string())
+            val("backslash\\test")
         );
 
         // Test unknown escape - the parser keeps the character as-is, removing the backslash
-        assert_eq!(
-            parse("\"other\\xchar\"").unwrap(),
-            Value::String("otherxchar".to_string())
-        );
+        assert_eq!(parse("\"other\\xchar\"").unwrap(), val("otherxchar"));
 
         // Test empty string
-        assert_eq!(parse("\"\"").unwrap(), Value::String("".to_string()));
+        assert_eq!(parse("\"\"").unwrap(), val(""));
 
         // Test unterminated string (should fail)
         assert!(parse("\"unterminated").is_err());
@@ -465,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_parse_nil() {
-        assert_eq!(parse("()").unwrap(), Value::List(vec![]));
+        assert_eq!(parse("()").unwrap(), nil());
     }
 
     #[test]
@@ -474,7 +426,7 @@ mod tests {
         if let Value::PrecompiledOp { op_id, args, .. } = parse("'foo").unwrap() {
             assert_eq!(op_id, "quote");
             assert_eq!(args.len(), 1);
-            assert_eq!(args[0], Value::Symbol("foo".to_string()));
+            assert_eq!(args[0], sym("foo"));
         } else {
             panic!("Expected PrecompiledOp for precompiled quote parse");
         }
@@ -483,10 +435,7 @@ mod tests {
         if let Value::PrecompiledOp { op_id, args, .. } = parse("'(1 2 3)").unwrap() {
             assert_eq!(op_id, "quote");
             assert_eq!(args.len(), 1);
-            assert_eq!(
-                args[0],
-                Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)])
-            );
+            assert_eq!(args[0], val([1, 2, 3]));
         } else {
             panic!("Expected PrecompiledOp for precompiled quote parse");
         }
@@ -495,7 +444,7 @@ mod tests {
         if let Value::PrecompiledOp { op_id, args, .. } = parse("'()").unwrap() {
             assert_eq!(op_id, "quote");
             assert_eq!(args.len(), 1);
-            assert_eq!(args[0], Value::List(vec![]));
+            assert_eq!(args[0], nil());
         } else {
             panic!("Expected PrecompiledOp for precompiled quote parse");
         }
@@ -504,33 +453,25 @@ mod tests {
     #[test]
     fn test_parse_list() {
         // Empty list (nil)
-        assert_eq!(parse("()").unwrap(), Value::List(vec![]));
+        assert_eq!(parse("()").unwrap(), nil());
 
         // Single element list
-        assert_eq!(parse("(42)").unwrap(), Value::List(vec![Value::Number(42)]));
+        assert_eq!(parse("(42)").unwrap(), val([42]));
 
-        // Regular list with mixed types
+        // Regular list with mixed types - can't fully convert due to symbol limitations
         assert_eq!(
             parse("(1 hello \"world\" #t)").unwrap(),
-            Value::List(vec![
-                Value::Number(1),
-                Value::Symbol("hello".to_string()),
-                Value::String("world".to_string()),
-                Value::Bool(true)
-            ])
+            val([val(1), sym("hello"), val("world"), val(true)])
         );
 
         // Regular list (not a builtin operation)
-        assert_eq!(
-            parse("(1 2 3)").unwrap(),
-            Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)])
-        );
+        assert_eq!(parse("(1 2 3)").unwrap(), val([1, 2, 3]));
 
         // Test that builtin operations are parsed as PrecompiledOp
         match parse("(+ 1 2)").unwrap() {
             Value::PrecompiledOp { op_id, args, .. } => {
                 assert_eq!(op_id, "+");
-                assert_eq!(args, vec![Value::Number(1), Value::Number(2)]);
+                assert_eq!(args, vec![val(1), val(2)]);
             }
             other => panic!("Expected PrecompiledOp, got {:?}", other),
         }
@@ -539,10 +480,7 @@ mod tests {
         match parse("(* 3 4 5)").unwrap() {
             Value::PrecompiledOp { op_id, args, .. } => {
                 assert_eq!(op_id, "*");
-                assert_eq!(
-                    args,
-                    vec![Value::Number(3), Value::Number(4), Value::Number(5)]
-                );
+                assert_eq!(args, vec![val(3), val(4), val(5)]);
             }
             other => panic!("Expected PrecompiledOp, got {:?}", other),
         }
@@ -551,7 +489,7 @@ mod tests {
         match parse("(< 1 2)").unwrap() {
             Value::PrecompiledOp { op_id, args, .. } => {
                 assert_eq!(op_id, "<");
-                assert_eq!(args, vec![Value::Number(1), Value::Number(2)]);
+                assert_eq!(args, vec![val(1), val(2)]);
             }
             other => panic!("Expected PrecompiledOp, got {:?}", other),
         }
@@ -560,10 +498,7 @@ mod tests {
         match parse("(if #t 1 2)").unwrap() {
             Value::PrecompiledOp { op_id, args, .. } => {
                 assert_eq!(op_id, "if");
-                assert_eq!(
-                    args,
-                    vec![Value::Bool(true), Value::Number(1), Value::Number(2)]
-                );
+                assert_eq!(args, vec![val(true), val(1), val(2)]);
             }
             other => panic!("Expected PrecompiledOp, got {:?}", other),
         }
@@ -571,18 +506,14 @@ mod tests {
         // Test that non-builtin symbols still create regular lists
         assert_eq!(
             parse("(foo 1 2)").unwrap(),
-            Value::List(vec![
-                Value::Symbol("foo".to_string()),
-                Value::Number(1),
-                Value::Number(2)
-            ])
+            val([sym("foo"), val(1), val(2)])
         );
 
         // Test that quote IS precompiled (like other special forms)
         match parse("(quote foo)").unwrap() {
             Value::PrecompiledOp { op_id, args, .. } => {
                 assert_eq!(op_id, "quote");
-                assert_eq!(args, vec![Value::Symbol("foo".to_string())]);
+                assert_eq!(args, vec![sym("foo")]);
             }
             other => panic!("Expected PrecompiledOp for quote, got {:?}", other),
         }
@@ -595,18 +526,12 @@ mod tests {
                 match &elements[0] {
                     Value::PrecompiledOp { op_id, args, .. } => {
                         assert_eq!(op_id, "+");
-                        assert_eq!(args, &vec![Value::Number(1), Value::Number(2)]);
+                        assert_eq!(args, &vec![val(1), val(2)]);
                     }
                     other => panic!("Expected PrecompiledOp, got {:?}", other),
                 }
                 // Second element should be regular list
-                assert_eq!(
-                    elements[1],
-                    Value::List(vec![
-                        Value::Symbol("foo".to_string()),
-                        Value::Symbol("bar".to_string())
-                    ])
-                );
+                assert_eq!(elements[1], val([sym("foo"), sym("bar")]));
             }
             other => panic!("Expected List, got {:?}", other),
         }
@@ -614,55 +539,34 @@ mod tests {
         // Test list with only symbols (should remain a list)
         assert_eq!(
             parse("(a b c)").unwrap(),
-            Value::List(vec![
-                Value::Symbol("a".to_string()),
-                Value::Symbol("b".to_string()),
-                Value::Symbol("c".to_string())
-            ])
+            val([sym("a"), sym("b"), sym("c")])
         );
 
         // Test list starting with number (should remain a list)
         assert_eq!(
             parse("(42 is the answer)").unwrap(),
-            Value::List(vec![
-                Value::Number(42),
-                Value::Symbol("is".to_string()),
-                Value::Symbol("the".to_string()),
-                Value::Symbol("answer".to_string())
-            ])
+            val([val(42), sym("is"), sym("the"), sym("answer")])
         );
     }
 
     #[test]
     fn test_parse_nested_list() {
-        assert_eq!(
-            parse("((1 2) (3 4))").unwrap(),
-            Value::List(vec![
-                Value::List(vec![Value::Number(1), Value::Number(2)]),
-                Value::List(vec![Value::Number(3), Value::Number(4)])
-            ])
-        );
+        assert_eq!(parse("((1 2) (3 4))").unwrap(), val([[1, 2], [3, 4]]));
     }
 
     #[test]
     fn test_whitespace_handling() {
         // Test various whitespace scenarios
-        assert_eq!(parse("  42  ").unwrap(), Value::Number(42));
-        assert_eq!(parse("\t#t\n").unwrap(), Value::Bool(true));
-        assert_eq!(
-            parse("\r\n  foo  \t").unwrap(),
-            Value::Symbol("foo".to_string())
-        );
+        assert_eq!(parse("  42  ").unwrap(), val(42));
+        assert_eq!(parse("\t#t\n").unwrap(), val(true));
+        assert_eq!(parse("\r\n  foo  \t").unwrap(), sym("foo"));
 
         // Lists with various whitespace
-        assert_eq!(
-            parse("( 1   2\t\n3 )").unwrap(),
-            Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)])
-        );
+        assert_eq!(parse("( 1   2\t\n3 )").unwrap(), val([1, 2, 3]));
 
         // Empty list with whitespace
-        assert_eq!(parse("(   )").unwrap(), Value::List(vec![]));
-        assert_eq!(parse("(\t\n)").unwrap(), Value::List(vec![]));
+        assert_eq!(parse("(   )").unwrap(), nil());
+        assert_eq!(parse("(\t\n)").unwrap(), nil());
     }
 
     #[test]
@@ -781,19 +685,12 @@ mod tests {
     #[test]
     fn test_complex_nested_structures() {
         // Deeply nested lists
-        assert_eq!(
-            parse("(((1)))").unwrap(),
-            Value::List(vec![Value::List(vec![Value::List(vec![Value::Number(1)])])])
-        );
+        assert_eq!(parse("(((1)))").unwrap(), val([val([val([val(1)])])]));
 
         // Mixed types in nested structure
         assert_eq!(
             parse("(foo (\"bar\" #t) -123)").unwrap(),
-            Value::List(vec![
-                Value::Symbol("foo".to_string()),
-                Value::List(vec![Value::String("bar".to_string()), Value::Bool(true)]),
-                Value::Number(-123)
-            ])
+            val([sym("foo"), val([val("bar"), val(true)]), val(-123)])
         );
     }
 }

@@ -1,8 +1,6 @@
 use crate::SchemeError;
 use crate::ast::Value;
-use crate::builtinops::{
-    Arity, BuiltinOp, find_builtin_op_by_jsonlogic_id, map_scheme_id_to_jsonlogic_id,
-};
+use crate::builtinops::{Arity, BuiltinOp, find_jsonlogic_op, find_scheme_op};
 use serde_json;
 
 /// Parse JSONLogic expression into AST value for evaluation
@@ -84,11 +82,10 @@ fn compile_jsonlogic_operation(
             // Validate that we have exactly 2 arguments for != operation
             Arity::Exact(2).validate(args.len())?;
 
-            let equal_builtin =
-                find_builtin_op_by_jsonlogic_id("==").expect("== builtin should exist");
+            let equal_builtin = find_jsonlogic_op("==").expect("== builtin should exist");
             let equal_op = create_precompiled_op(equal_builtin, args);
 
-            let not_builtin = find_builtin_op_by_jsonlogic_id("!").expect("! builtin should exist");
+            let not_builtin = find_jsonlogic_op("!").expect("! builtin should exist");
             Ok(create_precompiled_op(not_builtin, vec![equal_op]))
         }
 
@@ -107,7 +104,7 @@ fn compile_jsonlogic_operation(
         // For all other operations, look them up in the registry
         _ => {
             // Look up operation by JSONLogic id
-            if let Some(builtin_op) = find_builtin_op_by_jsonlogic_id(operator) {
+            if let Some(builtin_op) = find_jsonlogic_op(operator) {
                 let args = extract_operand_list(operands)?;
 
                 // Validate arity using the builtin operation's definition
@@ -154,19 +151,12 @@ fn ast_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> {
                 let args = args?;
 
                 // Convert Scheme operator names back to JSONLogic operators
-                let jsonlogic_op = map_scheme_id_to_jsonlogic_id(op);
+                let jsonlogic_op = find_scheme_op(op)
+                    .map(|builtin_op| builtin_op.jsonlogic_id)
+                    .unwrap_or(op);
 
-                // Handle different argument patterns
-                match args.len() {
-                    0 => Err(SchemeError::EvalError(format!(
-                        "Operation {} requires arguments",
-                        op
-                    ))),
-                    _ => {
-                        // Always use array format for all operations
-                        Ok(serde_json::json!({jsonlogic_op: args}))
-                    }
-                }
+                // Always use array format for all operations (including zero arguments)
+                Ok(serde_json::json!({jsonlogic_op: args}))
             } else {
                 // Convert list elements
                 let converted: Result<Vec<serde_json::Value>, SchemeError> =
@@ -186,17 +176,8 @@ fn ast_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> {
                 args.iter().map(ast_to_json_value).collect();
             let args = converted_args?;
 
-            // Handle different argument patterns
-            match args.len() {
-                0 => Err(SchemeError::EvalError(format!(
-                    "Operation {} requires arguments",
-                    op.scheme_id
-                ))),
-                _ => {
-                    // Always use array format for all operations
-                    Ok(serde_json::json!({jsonlogic_op: args}))
-                }
-            }
+            // Always use array format for all operations (including zero arguments)
+            Ok(serde_json::json!({jsonlogic_op: args}))
         }
         Value::Function { .. } => Err(SchemeError::EvalError(
             "Cannot convert user function to JSONLogic".to_string(),
@@ -206,274 +187,163 @@ fn ast_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> {
 
 #[cfg(test)]
 mod tests {
+    use core::panic;
+
     use super::*;
+    use crate::evaluator::{create_global_env, eval};
+    use crate::parser::parse as parse_scheme;
+
+    #[derive(Debug)]
+    enum TestResult {
+        Identical(&'static str),
+        IdenticalDontEvaluate(&'static str),
+        SemanticallyEquivalent(&'static str),
+        Error,
+    }
+    use TestResult::*;
 
     #[test]
-    fn test_parse_primitives() {
-        assert_eq!(parse_jsonlogic("true").unwrap(), Value::Bool(true));
-        assert_eq!(parse_jsonlogic("false").unwrap(), Value::Bool(false));
-        assert_eq!(parse_jsonlogic("42").unwrap(), Value::Number(42));
-        assert_eq!(
-            parse_jsonlogic("\"hello\"").unwrap(),
-            Value::String("hello".to_string())
-        );
+    fn test_jsonlogic_to_scheme_equivalence() {
+        // Test cases as tuples: (jsonlogic, scheme_equivalent)
+        // None for scheme_equivalent means we expect an error
+        let test_cases = [
+            // Basic primitives
+            ("true", Identical("#t")),
+            ("false", Identical("#f")),
+            ("42", Identical("42")),
+            (r#""hello""#, Identical(r#""hello""#)),
+            // Note: Array literals [1,2,3] are converted to lists (1 2 3) which would
+            // try to call 1 as a function. This is a semantic mismatch between JSONLogic
+            // arrays and Scheme lists that needs separate handling.
 
-        // null values are now rejected
-        assert!(parse_jsonlogic("null").is_err());
+            // Arithmetic operations
+            (r#"{"+": [1, 2, 3]}"#, Identical("(+ 1 2 3)")),
+            (r#"{"+": []}"#, Identical("(+)")),
+            (r#"{"-": [10, 3]}"#, Identical("(- 10 3)")),
+            (r#"{"*": [2, 3, 4]}"#, Identical("(* 2 3 4)")),
+            // Comparison operations
+            (r#"{"==": [1, 2]}"#, Identical("(equal? 1 2)")),
+            (r#"{">": [5, 3]}"#, Identical("(> 5 3)")),
+            (r#"{"<": [2, 5]}"#, Identical("(< 2 5)")),
+            (r#"{">=": [5, 5]}"#, Identical("(>= 5 5)")),
+            (r#"{"<=": [3, 5]}"#, Identical("(<= 3 5)")),
+            // Logical operations
+            (r#"{"and": [true, false]}"#, Identical("(and #t #f)")),
+            (r#"{"or": [false, false]}"#, Identical("(or #f #f)")),
+            (r#"{"!": [true]}"#, Identical("(not #t)")),
+            // Special != operation (expands to (not (equal? ...))) - use SemanticallyEquivalent since roundtrip differs
+            (
+                r#"{"!=": [1, 2]}"#,
+                SemanticallyEquivalent("(not (equal? 1 2))"),
+            ),
+            // Conditional operations
+            (
+                r#"{"if": [true, "yes", "no"]}"#,
+                Identical(r#"(if #t "yes" "no")"#),
+            ),
+            (
+                r#"{"if": [false, "yes", "no"]}"#,
+                Identical(r#"(if #f "yes" "no")"#),
+            ),
+            // Variable operations (simple symbol conversion)
+            (r#"{"var": "age"}"#, IdenticalDontEvaluate("age")),
+            // Nested operations
+            (
+                r#"{"and": [true, {">": [5, 3]}]}"#,
+                Identical("(and #t (> 5 3))"),
+            ),
+            (
+                r#"{"if": [{">": [10, 5]}, "big", "small"]}"#,
+                Identical(r#"(if (> 10 5) "big" "small")"#),
+            ),
+            // Unknown operations should still be emitted
+            (
+                r#"{"unknown": [1, 2, 3]}"#,
+                IdenticalDontEvaluate("(unknown 1 2 3)"),
+            ),
+            (
+                r#"{"unknown_zero_args": []}"#,
+                IdenticalDontEvaluate("(unknown_zero_args)"),
+            ),
+            // Error cases
+            ("null", Error),                     // Null values should be rejected
+            (r#"{"!=": [1]}"#, Error),           // Not equal with wrong arity should fail
+            (r#"{"!=": [1, 2, 3]}"#, Error),     // Not equal with too many args should fail
+            (r#"{"if": [true, "yes"]}"#, Error), // If with wrong arity should fail
+            ("invalid json", Error),             // Invalid JSON should fail
+            (r#"{"and": true, "or": false}"#, Error), // Multiple keys in object should fail
+        ];
+
+        run_data_driven_tests(&test_cases);
     }
 
-    #[test]
-    fn test_parse_logical_operations() {
-        // {"and": [true, false]}
-        let result = parse_jsonlogic(r#"{"and": [true, false]}"#).unwrap();
-        assert_eq!(
-            result.to_uncompiled_form(),
-            Value::List(vec![
-                Value::Symbol("and".to_string()),
-                Value::Bool(true),
-                Value::Bool(false)
-            ])
-        );
+    /// Helper function to test AST equivalence and roundtrip (shared by Identical and IdenticalDontEvaluate)
+    fn test_ast_equivalence_and_roundtrip(
+        jsonlogic: &str,
+        jsonlogic_ast: &Value,
+        expected_scheme: &str,
+    ) {
+        let scheme_ast = parse_scheme(expected_scheme).unwrap();
+        assert!(jsonlogic_ast == &scheme_ast);
 
-        // {"or": [true, false]}
-        let result = parse_jsonlogic(r#"{"or": [true, false]}"#).unwrap();
+        // Test JSONLogic -> AST -> JSONLogic roundtrip (should always work)
+        let back_to_json = ast_to_jsonlogic(jsonlogic_ast).unwrap();
+        // Parse both JSON strings to compare structure rather than formatting
+        let original_json: serde_json::Value = serde_json::from_str(jsonlogic).unwrap();
+        let roundtrip_json: serde_json::Value = serde_json::from_str(&back_to_json).unwrap();
         assert_eq!(
-            result.to_uncompiled_form(),
-            Value::List(vec![
-                Value::Symbol("or".to_string()),
-                Value::Bool(true),
-                Value::Bool(false)
-            ])
-        );
-
-        // {"!": [true]}
-        let result = parse_jsonlogic(r#"{"!": [true]}"#).unwrap();
-        assert_eq!(
-            result.to_uncompiled_form(),
-            Value::List(vec![Value::Symbol("not".to_string()), Value::Bool(true)])
-        );
-    }
-
-    #[test]
-    fn test_parse_comparisons() {
-        // {"==": [1, 1]}
-        let result = parse_jsonlogic(r#"{"==": [1, 1]}"#).unwrap();
-        assert_eq!(
-            result.to_uncompiled_form(),
-            Value::List(vec![
-                Value::Symbol("equal?".to_string()),
-                Value::Number(1),
-                Value::Number(1)
-            ])
-        );
-
-        // {">": [2, 1]}
-        let result = parse_jsonlogic(r#"{">": [2, 1]}"#).unwrap();
-        assert_eq!(
-            result.to_uncompiled_form(),
-            Value::List(vec![
-                Value::Symbol(">".to_string()),
-                Value::Number(2),
-                Value::Number(1)
-            ])
-        );
-    }
-
-    #[test]
-    fn test_parse_arithmetic() {
-        // {"+": [1, 2, 3]}
-        let result = parse_jsonlogic(r#"{"+": [1, 2, 3]}"#).unwrap();
-        assert_eq!(
-            result.to_uncompiled_form(),
-            Value::List(vec![
-                Value::Symbol("+".to_string()),
-                Value::Number(1),
-                Value::Number(2),
-                Value::Number(3)
-            ])
-        );
-    }
-
-    #[test]
-    fn test_parse_var() {
-        // {"var": "age"}
-        let result = parse_jsonlogic(r#"{"var": "age"}"#).unwrap();
-        assert_eq!(result, Value::Symbol("age".to_string()));
-    }
-
-    #[test]
-    fn test_nested_operations() {
-        // {"and": [{"var": "age"}, {">": [{"var": "age"}, 18]}]}
-        let result =
-            parse_jsonlogic(r#"{"and": [{"var": "age"}, {">": [{"var": "age"}, 18]}]}"#).unwrap();
-        assert_eq!(
-            result.to_uncompiled_form(),
-            Value::List(vec![
-                Value::Symbol("and".to_string()),
-                Value::Symbol("age".to_string()),
-                Value::List(vec![
-                    Value::Symbol(">".to_string()),
-                    Value::Symbol("age".to_string()),
-                    Value::Number(18)
-                ])
-            ])
+            roundtrip_json, original_json,
+            "Roundtrip failed: {} -> {} (expected {})",
+            jsonlogic, back_to_json, jsonlogic
         );
     }
 
-    #[test]
-    fn test_arity_validation_and_registry() {
-        // Test != with correct arity (2 arguments)
-        let result = parse_jsonlogic(r#"{"!=": [1, 2]}"#).unwrap();
-        assert!(matches!(result, Value::PrecompiledOp { .. }));
+    /// Helper function to run data-driven tests
+    fn run_data_driven_tests(test_cases: &[(&str, TestResult)]) {
+        for (jsonlogic, expected_result) in test_cases {
+            println!(
+                "Testing JSONLogic: {}, expected: {:?}",
+                jsonlogic, expected_result
+            );
 
-        // Test != with wrong arity (1 argument) - should fail
-        assert!(parse_jsonlogic(r#"{"!=": [1]}"#).is_err());
+            match (parse_jsonlogic(jsonlogic), expected_result) {
+                (Ok(jsonlogic_ast), Identical(expected_scheme)) => {
+                    test_ast_equivalence_and_roundtrip(jsonlogic, &jsonlogic_ast, expected_scheme);
+                    // Test evaluation of AST as well
+                    assert!(eval(&jsonlogic_ast, &mut create_global_env()).is_ok());
+                }
+                (Ok(jsonlogic_ast), IdenticalDontEvaluate(expected_scheme)) => {
+                    test_ast_equivalence_and_roundtrip(jsonlogic, &jsonlogic_ast, expected_scheme);
+                }
+                (Ok(jsonlogic_ast), SemanticallyEquivalent(expected_scheme)) => {
+                    let scheme_ast = parse_scheme(expected_scheme).unwrap();
+                    let jsonlogic_val = eval(&jsonlogic_ast, &mut create_global_env()).unwrap();
+                    let scheme_val = eval(&scheme_ast, &mut create_global_env()).unwrap();
+                    assert_eq!(jsonlogic_val, scheme_val);
 
-        // Test != with wrong arity (3 arguments) - should fail
-        assert!(parse_jsonlogic(r#"{"!=": [1, 2, 3]}"#).is_err());
+                    // For semantic equivalence tests, also verify that roundtrip produces different
+                    // but semantically equivalent JSONLogic (like != expanding to not+equal)
+                    if let Ok(back_to_json) = ast_to_jsonlogic(&jsonlogic_ast)
+                        && back_to_json != *jsonlogic
+                    {
+                        // Verify that the roundtrip version also evaluates to the same result
+                        let roundtrip_parsed = parse_jsonlogic(&back_to_json).unwrap();
+                        let roundtrip_result =
+                            eval(&roundtrip_parsed, &mut create_global_env()).unwrap();
+                        assert_eq!(jsonlogic_val, roundtrip_result);
+                    }
+                }
 
-        // Test operations from registry get proper arity validation
-        // Test "!" (not) with correct arity
-        let result = parse_jsonlogic(r#"{"!": [true]}"#).unwrap();
-        assert!(matches!(result, Value::PrecompiledOp { .. }));
-
-        // Test "if" with correct arity (exactly 3)
-        let result = parse_jsonlogic(r#"{"if": [true, 1, 2]}"#).unwrap();
-        assert!(matches!(result, Value::PrecompiledOp { .. }));
-
-        // Test "if" with wrong arity (2 arguments) - should fail
-        assert!(parse_jsonlogic(r#"{"if": [true, 1]}"#).is_err());
-
-        // Test operations not in registry get emitted as lists
-        let result = parse_jsonlogic(r#"{"unknown": [1, 2, 3]}"#).unwrap();
-        assert_eq!(
-            result,
-            Value::List(vec![
-                Value::Symbol("unknown".to_string()),
-                Value::Number(1),
-                Value::Number(2),
-                Value::Number(3)
-            ])
-        );
-
-        // Test that operations in registry but with wrong arity fail
-        // Addition with too few args should fail based on builtin arity
-        // Note: "+" has AtLeast(0) arity, so this should succeed
-        let result = parse_jsonlogic(r#"{"+": []}"#).unwrap();
-        assert!(matches!(result, Value::PrecompiledOp { .. }));
-    }
-
-    #[test]
-    fn test_error_cases() {
-        // Invalid JSON
-        assert!(parse_jsonlogic("invalid json").is_err());
-
-        // Multiple keys in object
-        assert!(parse_jsonlogic(r#"{"and": true, "or": false}"#).is_err());
-
-        // Unknown operator should now emit a regular list instead of failing
-        let result = parse_jsonlogic(r#"{"unknown": [1, 2]}"#).unwrap();
-        assert_eq!(
-            result,
-            Value::List(vec![
-                Value::Symbol("unknown".to_string()),
-                Value::Number(1),
-                Value::Number(2)
-            ])
-        );
-    }
-
-    #[test]
-    fn test_ast_to_jsonlogic() {
-        // Test primitives
-        assert_eq!(ast_to_jsonlogic(&Value::Bool(true)).unwrap(), "true");
-        assert_eq!(ast_to_jsonlogic(&Value::Bool(false)).unwrap(), "false");
-        assert_eq!(ast_to_jsonlogic(&Value::Number(42)).unwrap(), "42");
-        assert_eq!(
-            ast_to_jsonlogic(&Value::String("hello".to_string())).unwrap(),
-            "\"hello\""
-        );
-
-        // Test symbols (compiled to var operations)
-        assert_eq!(
-            ast_to_jsonlogic(&Value::Symbol("age".to_string())).unwrap(),
-            r#"{"var":"age"}"#
-        );
-
-        // Test simple operations
-        let and_op = Value::List(vec![
-            Value::Symbol("and".to_string()),
-            Value::Bool(true),
-            Value::Bool(false),
-        ]);
-        assert_eq!(
-            ast_to_jsonlogic(&and_op).unwrap(),
-            r#"{"and":[true,false]}"#
-        );
-
-        // Test unary operation (always uses array format)
-        let not_op = Value::List(vec![Value::Symbol("not".to_string()), Value::Bool(true)]);
-        assert_eq!(ast_to_jsonlogic(&not_op).unwrap(), r#"{"!":[true]}"#);
-
-        // Test equality operation
-        let eq_op = Value::List(vec![
-            Value::Symbol("equal?".to_string()),
-            Value::Number(1),
-            Value::Number(2),
-        ]);
-        assert_eq!(ast_to_jsonlogic(&eq_op).unwrap(), r#"{"==":[1,2]}"#);
-    }
-
-    #[test]
-    fn test_precompiled_op_roundtrip() {
-        // Test that JSONLogic -> PrecompiledOp -> JSONLogic works correctly
-
-        // Test arithmetic operation
-        let original_json = r#"{"+":[1,2,3]}"#;
-        let parsed = parse_jsonlogic(original_json).unwrap();
-        // Verify we got a PrecompiledOp
-        assert!(matches!(parsed, Value::PrecompiledOp { .. }));
-        let back_to_json = ast_to_jsonlogic(&parsed).unwrap();
-        assert_eq!(back_to_json, original_json);
-
-        // Test comparison operation
-        let original_json = r#"{"==":[1,2]}"#;
-        let parsed = parse_jsonlogic(original_json).unwrap();
-        assert!(matches!(parsed, Value::PrecompiledOp { .. }));
-        let back_to_json = ast_to_jsonlogic(&parsed).unwrap();
-        assert_eq!(back_to_json, original_json);
-
-        // Test logical operation
-        let original_json = r#"{"and":[true,false]}"#;
-        let parsed = parse_jsonlogic(original_json).unwrap();
-        assert!(matches!(parsed, Value::PrecompiledOp { .. }));
-        let back_to_json = ast_to_jsonlogic(&parsed).unwrap();
-        assert_eq!(back_to_json, original_json);
-
-        // Test unary operation
-        let original_json = r#"{"!":[true]}"#;
-        let parsed = parse_jsonlogic(original_json).unwrap();
-        assert!(matches!(parsed, Value::PrecompiledOp { .. }));
-        let back_to_json = ast_to_jsonlogic(&parsed).unwrap();
-        assert_eq!(back_to_json, original_json);
-
-        // Test nested operations
-        let original_json = r#"{"and":[{"var":"age"},{">":[{"var":"age"},18]}]}"#;
-        let parsed = parse_jsonlogic(original_json).unwrap();
-        assert!(matches!(parsed, Value::PrecompiledOp { .. }));
-        let back_to_json = ast_to_jsonlogic(&parsed).unwrap();
-        assert_eq!(back_to_json, original_json);
-
-        // Test "!=" semantic roundtrip (not exact)
-        // JSONLogic {"!=": [a, b]} gets parsed into internal structure: (not (equal? a b))
-        // When converted back to JSONLogic, it becomes {"!": [{"==": [a, b]}]}
-        // This is semantically equivalent but not syntactically identical
-        let original_json = r#"{"!=":[1,2]}"#;
-        let parsed = parse_jsonlogic(original_json).unwrap();
-        assert!(matches!(parsed, Value::PrecompiledOp { .. }));
-        let back_to_json = ast_to_jsonlogic(&parsed).unwrap();
-        // This demonstrates semantic but not exact roundtrip
-        assert_eq!(back_to_json, r#"{"!":[{"==":[1,2]}]}"#);
-        assert_ne!(back_to_json, original_json); // Not exact roundtrip
+                (Err(_), Error) => {
+                    // Expected error
+                }
+                (_, _) => {
+                    panic!(
+                        "Test failed for JSONLogic: {} Expected: {:?}",
+                        jsonlogic, expected_result
+                    );
+                }
+            }
+        }
     }
 }

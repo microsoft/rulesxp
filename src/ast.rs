@@ -1,7 +1,16 @@
+/// This module defines the core Abstract Syntax Tree (AST) types and helper functions
+/// for representing Scheme values in the interpreter. The main enum, [`Value`], covers
+/// all Scheme data types, including numbers, symbols, strings, booleans, lists, built-in
+/// and user-defined functions, and precompiled operations. Ergonomic helper functions
+/// such as [`val`], [`sym`], and [`nil`] are provided for convenient AST construction
+/// in both code and tests. The module also implements conversion traits for common Rust
+/// types, making it easy to build Scheme values from Rust literals, arrays, slices, and
+/// vectors. Equality and display logic are customized to match Scheme semantics, including
+/// round-trip compatibility for precompiled operations.
 use crate::SchemeError;
 use crate::builtinops::BuiltinOp;
 
-/// Core AST value types in our Scheme interpreter
+/// Core AST type in our Scheme interpreter
 ///
 /// Note: PrecompiledOps (optimized s-expressions) don't equality-compare to dynamically
 /// generated unoptimized s-expressions. However, since no expression can *return* a
@@ -36,6 +45,85 @@ pub enum Value {
         body: Box<Value>,
         env: crate::evaluator::Environment,
     },
+}
+
+// From trait implementations for Value - enables .into() conversion
+impl From<&str> for Value {
+    fn from(s: &str) -> Self {
+        Value::String(s.to_string())
+    }
+}
+
+impl From<String> for Value {
+    fn from(s: String) -> Self {
+        Value::String(s)
+    }
+}
+
+impl From<bool> for Value {
+    fn from(b: bool) -> Self {
+        Value::Bool(b)
+    }
+}
+
+macro_rules! impl_from_integer {
+    ($int_type:ty) => {
+        impl From<$int_type> for Value {
+            fn from(n: $int_type) -> Self {
+                Value::Number(n as i64)
+            }
+        }
+    };
+}
+
+// Generate From implementations for all integer types
+impl_from_integer!(i8);
+impl_from_integer!(i16);
+impl_from_integer!(i32);
+impl_from_integer!(i64); // Special case - no casting
+impl_from_integer!(u8);
+impl_from_integer!(u16);
+impl_from_integer!(u32);
+
+impl<T: Into<Value>> From<Vec<T>> for Value {
+    fn from(v: Vec<T>) -> Self {
+        Value::List(v.into_iter().map(|x| x.into()).collect())
+    }
+}
+
+impl<T: Into<Value>, const N: usize> From<[T; N]> for Value {
+    fn from(arr: [T; N]) -> Self {
+        Value::List(arr.into_iter().map(|x| x.into()).collect())
+    }
+}
+
+impl<T: Into<Value> + Clone> From<&[T]> for Value {
+    fn from(slice: &[T]) -> Self {
+        Value::List(slice.iter().cloned().map(|x| x.into()).collect())
+    }
+}
+
+/// To build an AST, use the ergonomic helper functions:
+/// - `val(42)` for values, `sym("name")` for symbols, `nil()` for empty lists
+/// - `val([1, 2, 3])` for homogeneous lists
+/// - `val(vec![sym("op"), val(42)])` for mixed lists
+
+/// Helper function for creating symbols - works great in mixed lists!
+/// Accepts both &str and String via Into<&str>
+pub fn sym<S: AsRef<str>>(name: S) -> Value {
+    Value::Symbol(name.as_ref().to_string())
+}
+
+/// Helper function for creating Values - works great in mixed lists!
+/// Accepts any type that can be converted to Value
+pub fn val<T: Into<Value>>(value: T) -> Value {
+    value.into()
+}
+
+/// Helper function for creating empty lists (nil) - follows Lisp/Scheme conventions
+/// In Lisp, nil represents the empty list
+pub fn nil() -> Value {
+    Value::List(vec![])
 }
 
 impl std::fmt::Display for Value {
@@ -135,6 +223,90 @@ impl PartialEq for Value {
                 },
             ) => p1 == p2 && b1 == b2 && e1 == e2,
             _ => false, // Different variants are never equal
+        }
+    }
+}
+
+#[cfg(test)]
+mod helper_function_tests {
+    use super::*;
+
+    #[test]
+    fn test_helper_functions_data_driven() {
+        // Test cases as (Value, Value) tuples: (helper_result, expected_value)
+        let test_cases = vec![
+            // Basic numbers
+            (val(42), Value::Number(42)),
+            (val(-17), Value::Number(-17)),
+            (val(-0), Value::Number(0)),
+            // Different integer types from macro
+            (val(4294967295u32), Value::Number(4294967295)),
+            (val(2147483647i32), Value::Number(2147483647)),
+            (val(255u8), Value::Number(255)),
+            (val(-128i8), Value::Number(-128)),
+            (val(65535u16), Value::Number(65535)),
+            (val(-32768i16), Value::Number(-32768)),
+            (
+                val(9223372036854775807i64),
+                Value::Number(9223372036854775807),
+            ),
+            (val(i64::MIN), Value::Number(i64::MIN)),
+            // Basic booleans
+            (val(true), Value::Bool(true)),
+            (val("hello"), Value::String("hello".to_string())),
+            (val(""), Value::String("".to_string())),
+            // Sym, from both &str and String
+            (sym("foo-bar?"), Value::Symbol("foo-bar?".to_string())),
+            (sym("-"), Value::Symbol("-".to_string())),
+            (sym(String::from("test")), Value::Symbol("test".to_string())),
+            // Empty list (nil)
+            (nil(), Value::List(vec![])),
+            // Lists from arrays and vecs of primitives
+            (
+                val([1, 2, 3]),
+                Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]),
+            ),
+            (
+                val(["hello", "world"]),
+                Value::List(vec![
+                    Value::String("hello".to_string()),
+                    Value::String("world".to_string()),
+                ]),
+            ),
+            (
+                val([true, false, true]),
+                Value::List(vec![
+                    Value::Bool(true),
+                    Value::Bool(false),
+                    Value::Bool(true),
+                ]),
+            ),
+            // Mixed type lists using helper functions
+            (
+                val(vec![sym("operation"), val(42), val("result"), val(true)]),
+                Value::List(vec![
+                    Value::Symbol("operation".to_string()),
+                    Value::Number(42),
+                    Value::String("result".to_string()),
+                    Value::Bool(true),
+                ]),
+            ),
+        ];
+
+        run_helper_function_tests(test_cases);
+    }
+
+    /// Helper function to run data-driven tests for helper functions
+    fn run_helper_function_tests(test_cases: Vec<(Value, Value)>) {
+        for (i, (actual, expected)) in test_cases.iter().enumerate() {
+            if actual != expected {
+                panic!(
+                    "Test case {} failed:\n  Expected: {:?}\n  Got: {:?}",
+                    i + 1,
+                    expected,
+                    actual
+                );
+            }
         }
     }
 }

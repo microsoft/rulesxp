@@ -1,5 +1,5 @@
 use crate::SchemeError;
-use crate::ast::Value;
+use crate::ast::{Value, nil, sym, val};
 use crate::builtinops::get_builtin_ops;
 use std::collections::HashMap;
 
@@ -342,92 +342,216 @@ mod tests {
         eval(&expr, &mut env)
     }
 
-    #[test]
-    fn test_self_evaluating() {
-        assert_eq!(eval_string("42").unwrap(), Value::Number(42));
-        assert_eq!(eval_string("#t").unwrap(), Value::Bool(true));
-        assert_eq!(
-            eval_string("\"hello\"").unwrap(),
-            Value::String("hello".to_string())
-        );
+    /// Micro-helper for success cases in comprehensive tests
+    fn success<T: Into<Value>>(value: T) -> Option<Value> {
+        Some(val(value))
+    }
+
+    /// Helper function to run comprehensive tests with success/failure cases
+    fn run_comprehensive_tests(test_cases: Vec<(&str, Option<Value>)>) {
+        for (i, (input, expected)) in test_cases.iter().enumerate() {
+            let result = eval_string(input);
+            match (result, expected) {
+                (Ok(actual), Some(exp)) if actual == *exp => {} // Pass
+                (Err(_), None) => {}                            // Expected error - pass
+                (Ok(actual), Some(exp)) => {
+                    panic!("#{}: expected {:?}, got {:?}", i + 1, exp, actual)
+                }
+                (Ok(actual), None) => panic!("#{}: should fail, got {:?}", i + 1, actual),
+                (Err(err), Some(exp)) => {
+                    panic!("#{}: expected {:?}, got error {:?}", i + 1, exp, err)
+                }
+            }
+        }
     }
 
     #[test]
-    fn test_arithmetic() {
-        assert_eq!(eval_string("(+ 1 2 3)").unwrap(), Value::Number(6));
-        assert_eq!(eval_string("(- 10 3 2)").unwrap(), Value::Number(5));
-        assert_eq!(eval_string("(* 2 3 4)").unwrap(), Value::Number(24));
-    }
+    fn test_comprehensive_operations_data_driven() {
+        let test_cases = vec![
+            // === SELF-EVALUATING FORMS ===
+            // Numbers
+            ("42", success(42)),
+            ("-271", success(-271)),
+            ("0", success(0)),
+            ("9223372036854775807", success(i64::MAX)),
+            ("-9223372036854775808", success(i64::MIN)),
+            // Booleans
+            ("#t", success(true)),
+            ("#f", success(false)),
+            // Strings
+            ("\"hello\"", success("hello")),
+            ("\"hello world\"", success("hello world")),
+            ("\"\"", success("")),
+            ("\"with\\\"quotes\"", success("with\"quotes")),
+            // === ARITHMETIC OPERATIONS ===
+            // Addition (allows 0 arguments - returns 0)
+            ("(+ 1 2 3)", success(6)),
+            ("(+ 0)", success(0)),
+            ("(+ 42)", success(42)),
+            ("(+ -5 10)", success(5)),
+            ("(+)", success(0)), // Addition with no args returns 0
+            // Subtraction (requires at least 1 argument)
+            ("(- 10 3 2)", success(5)),
+            ("(- 10)", success(-10)), // Unary negation
+            ("(- 0)", success(0)),
+            ("(- -5)", success(5)),
+            ("(- 100 50 25)", success(25)),
+            // Multiplication (requires at least 1 argument)
+            ("(* 2 3 4)", success(24)),
+            ("(* 0 100)", success(0)),
+            ("(* 1)", success(1)),
+            ("(* -2 3)", success(-6)),
+            ("(* 7)", success(7)), // Single argument returns itself
+            // Mixed operations with nested expressions
+            ("(+ (* 2 3) (- 8 2))", success(12)),
+            ("(* (+ 1 2) (- 5 2))", success(9)),
+            ("(- (+ 10 5) (* 2 3))", success(9)),
+            // Arithmetic overflow errors
+            ("(+ 9223372036854775807 1)", None),  // i64::MAX + 1
+            ("(- -9223372036854775808)", None),   // -(i64::MIN)
+            ("(- -9223372036854775808 1)", None), // i64::MIN - 1
+            ("(* 4611686018427387904 2)", None),  // (i64::MAX/2 + 1) * 2
+            // === EQUALITY AND COMPARISON OPERATIONS ===
+            // Numeric equality (spec-compliant - only accepts numbers)
+            ("(= 5 5)", success(true)),
+            ("(= 5 6)", success(false)),
+            ("(= 0 0)", success(true)),
+            ("(= -1 -1)", success(true)),
+            ("(= 100 200)", success(false)),
+            // = rejects non-numbers (type errors)
+            ("(= \"hello\" \"hello\")", None),
+            ("(= #t #t)", None),
+            ("(= #f #f)", None),
+            // General equality with equal? (works for all types)
+            ("(equal? 5 5)", success(true)),
+            ("(equal? 5 6)", success(false)),
+            ("(equal? \"hello\" \"hello\")", success(true)),
+            ("(equal? \"hello\" \"world\")", success(false)),
+            ("(equal? #t #t)", success(true)),
+            ("(equal? #t #f)", success(false)),
+            ("(equal? #f #f)", success(true)),
+            // Numeric comparison operators
+            ("(< 3 5)", success(true)),
+            ("(< 5 3)", success(false)),
+            ("(< 0 1)", success(true)),
+            ("(< -5 -3)", success(true)),
+            ("(> 5 3)", success(true)),
+            ("(> 3 5)", success(false)),
+            ("(> 1 0)", success(true)),
+            ("(> -3 -5)", success(true)),
+            ("(<= 3 5)", success(true)),
+            ("(<= 5 5)", success(true)),
+            ("(<= 5 3)", success(false)),
+            ("(<= 0 0)", success(true)),
+            ("(>= 5 3)", success(true)),
+            ("(>= 5 5)", success(true)),
+            ("(>= 3 5)", success(false)),
+            ("(>= 0 0)", success(true)),
+            // === QUOTE OPERATIONS ===
+            // Longhand quote syntax
+            ("(quote hello)", success(sym("hello"))),
+            ("(quote foo)", success(sym("foo"))),
+            ("(quote (1 2 3))", success([1, 2, 3])),
+            ("(quote (+ 1 2))", success([sym("+"), val(1), val(2)])),
+            ("(quote (a b c))", success([sym("a"), sym("b"), sym("c")])),
+            ("(quote ())", success(nil())), // Empty list (nil)
+            // Shorthand quote syntax
+            ("'hello", success(sym("hello"))),
+            ("'(1 2 3)", success([1, 2, 3])),
+            ("'(+ 1 2)", success([sym("+"), val(1), val(2)])),
+            ("'()", success(nil())), // Empty list (nil) via shorthand
+            ("'42", success(42)),
+            ("'#t", success(true)),
+            // Nested quotes
+            ("'(quote x)", success([sym("quote"), sym("x")])),
+            ("''x", success([sym("quote"), sym("x")])),
+            // === LIST OPERATIONS ===
+            // Basic list access
+            ("(car (list 1 2 3))", success(1)),
+            ("(car (list \"first\" \"second\"))", success("first")),
+            ("(cdr (list 1 2 3))", success([2, 3])),
+            ("(cdr (list \"a\" \"b\" \"c\"))", success(["b", "c"])),
+            // List construction
+            ("(cons 1 (list 2 3))", success([1, 2, 3])),
+            ("(cons \"x\" (list \"y\" \"z\"))", success(["x", "y", "z"])),
+            ("(list)", success(nil())),
+            ("(list 1)", success([1])),
+            ("(list 1 2 3 4)", success([1, 2, 3, 4])),
+            // === CONDITIONAL OPERATIONS ===
+            // Basic if expressions
+            ("(if #t 1 2)", success(1)),
+            ("(if #f 1 2)", success(2)),
+            ("(if #t \"yes\" \"no\")", success("yes")),
+            ("(if #f \"yes\" \"no\")", success("no")),
+            // if with computed conditions
+            ("(if (> 5 3) \"greater\" \"lesser\")", success("greater")),
+            ("(if (< 5 3) \"greater\" \"lesser\")", success("lesser")),
+            ("(if (equal? 1 1) 42 0)", success(42)),
+            // SCHEME-JSONLOGIC-STRICT: if condition must be a boolean (rejects truthy/falsy)
+            ("(if 0 1 2)", None),
+            ("(if 42 1 2)", None),
+            ("(if () 1 2)", None),
+            ("(if \"hello\" 1 2)", None),
+            // SCHEME-JSONLOGIC-STRICT: Require exactly 3 arguments
+            // (Scheme allows 2 args with undefined behavior, JSONLogic allows chaining with >3 args)
+            ("(if #t 1)", None),
+            ("(if #f 1)", None),
+            ("(if #t)", None),
+            // === BOOLEAN LOGIC OPERATIONS ===
+            // and operator - SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
+            ("(and #t)", success(true)),
+            ("(and #f)", success(false)),
+            ("(and #t #t)", success(true)),
+            ("(and #t #f)", success(false)),
+            ("(and #f #t)", success(false)),
+            ("(and #t #t #t)", success(true)),
+            ("(and #t #t #f)", success(false)),
+            // and errors - SCHEME-JSONLOGIC-STRICT: and requires boolean arguments
+            ("(and)", None),        // requires at least 1 argument
+            ("(and 1 2 3)", None),  // rejects non-booleans
+            ("(and 1 #f 3)", None), // rejects non-booleans
+            // or operator - SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #f)
+            ("(or #t)", success(true)),
+            ("(or #f)", success(false)),
+            ("(or #t #f)", success(true)),
+            ("(or #f #t)", success(true)),
+            ("(or #f #f)", success(false)),
+            ("(or #f #f #t)", success(true)),
+            ("(or #f #f #f)", success(false)),
+            // or errors - SCHEME-JSONLOGIC-STRICT: or requires boolean arguments
+            ("(or)", None),        // requires at least 1 argument
+            ("(or #f 2 3)", None), // rejects non-booleans
+            ("(or 1 2 3)", None),  // rejects non-booleans
+            // not operator (requires exactly 1 boolean argument)
+            ("(not #t)", success(false)),
+            ("(not #f)", success(true)),
+            // not errors - SCHEME-JSONLOGIC-STRICT: not requires boolean arguments
+            ("(not ())", None),        // rejects non-booleans
+            ("(not 0)", None),         // rejects non-booleans
+            ("(not 42)", None),        // rejects non-booleans
+            ("(not \"hello\")", None), // rejects non-booleans
+            // Complex boolean expressions
+            ("(and (or #f #t) (not #f))", success(true)),
+            ("(or (and #f #t) (not #f))", success(true)),
+            ("(not (and #t #f))", success(true)),
+            ("(and (> 5 3) (< 2 4))", success(true)),
+            ("(or (= 1 2) (= 2 2))", success(true)),
+            // Short-circuit evaluation - undefined variables not evaluated due to short-circuit
+            ("(and #f undefined-var)", success(false)), // should not evaluate undefined-var
+            ("(or #t undefined-var)", success(true)),   // should not evaluate undefined-var
 
-    #[test]
-    fn test_arithmetic_overflow() {
-        // Test addition overflow
-        let max_val = i64::MAX;
-        let overflow_add = format!("(+ {} 1)", max_val);
-        assert!(eval_string(&overflow_add).is_err());
+            // === STRICT EVALUATION SEMANTICS ===
+            // SCHEME-STRICT: Empty list () is NOT self-evaluating (must be quoted)
+            // This is stricter than standard Scheme but more predictable
+            ("()", None), // Empty list should error when evaluated directly
+            // SCHEME-STRICT: if condition must be boolean (rejects truthy/falsy including nil)
+            ("(if '() 1 2)", None), // nil as condition should error
+            // null? function works with quoted empty lists
+            ("(null? '())", success(true)),
+            ("(null? (list 1))", success(false)),
+        ];
 
-        // Test subtraction overflow (negating MIN value)
-        let min_val = i64::MIN;
-        let overflow_neg = format!("(- {})", min_val);
-        assert!(eval_string(&overflow_neg).is_err());
-
-        // Test subtraction underflow
-        let underflow_sub = format!("(- {} 1)", min_val);
-        assert!(eval_string(&underflow_sub).is_err());
-
-        // Test multiplication overflow
-        let large_val = i64::MAX / 2 + 1;
-        let overflow_mul = format!("(* {} 2)", large_val);
-        assert!(eval_string(&overflow_mul).is_err());
-    }
-
-    #[test]
-    fn test_comparisons() {
-        // Test numeric = (spec-compliant)
-        assert_eq!(eval_string("(= 5 5)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(= 5 6)").unwrap(), Value::Bool(false));
-
-        // Test that = rejects non-numbers
-        assert!(eval_string("(= \"hello\" \"hello\")").is_err());
-        assert!(eval_string("(= #t #t)").is_err());
-
-        // Test general equality with equal?
-        assert_eq!(eval_string("(equal? 5 5)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(equal? 5 6)").unwrap(), Value::Bool(false));
-        assert_eq!(
-            eval_string("(equal? \"hello\" \"hello\")").unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            eval_string("(equal? \"hello\" \"world\")").unwrap(),
-            Value::Bool(false)
-        );
-        assert_eq!(eval_string("(equal? #t #t)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(equal? #t #f)").unwrap(), Value::Bool(false));
-
-        // Test numeric comparisons
-        assert_eq!(eval_string("(< 3 5)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(< 5 3)").unwrap(), Value::Bool(false));
-        assert_eq!(eval_string("(> 5 3)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(> 3 5)").unwrap(), Value::Bool(false));
-        assert_eq!(eval_string("(<= 3 5)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(<= 5 5)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(<= 5 3)").unwrap(), Value::Bool(false));
-        assert_eq!(eval_string("(>= 5 3)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(>= 5 5)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(>= 3 5)").unwrap(), Value::Bool(false));
-    }
-
-    #[test]
-    fn test_quote() {
-        assert_eq!(
-            eval_string("(quote foo)").unwrap(),
-            Value::Symbol("foo".to_string())
-        );
-        assert_eq!(
-            eval_string("(quote (1 2 3))").unwrap(),
-            Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)])
-        );
+        run_comprehensive_tests(test_cases);
     }
 
     #[test]
@@ -437,88 +561,7 @@ mod tests {
         eval(&define_expr, &mut env).unwrap();
 
         let lookup_expr = parse("x").unwrap();
-        assert_eq!(eval(&lookup_expr, &mut env).unwrap(), Value::Number(42));
-    }
-
-    #[test]
-    fn test_if() {
-        // Test if with boolean conditions - now requires exactly 3 arguments
-        assert_eq!(eval_string("(if #t 1 2)").unwrap(), Value::Number(1));
-        assert_eq!(eval_string("(if #f 1 2)").unwrap(), Value::Number(2));
-
-        // SCHEME-JSONLOGIC-STRICT: Require exactly 3 arguments
-        // (Scheme allows 2 args with undefined behavior, JSONLogic allows chaining with >3 args)
-        assert!(eval_string("(if #t 1)").is_err()); // Too few arguments
-        assert!(eval_string("(if #f 1)").is_err()); // Too few arguments
-
-        // Test that if rejects non-boolean conditions
-        assert!(eval_string("(if 0 1 2)").is_err()); // should error with non-boolean
-        assert!(eval_string("(if 42 1 2)").is_err()); // should error with non-boolean
-        assert!(eval_string("(if () 1 2)").is_err()); // should error with non-boolean
-        assert!(eval_string("(if \"hello\" 1 2)").is_err()); // should error with non-boolean
-    }
-
-    #[test]
-    fn test_list_operations() {
-        assert_eq!(eval_string("(car (list 1 2 3))").unwrap(), Value::Number(1));
-        assert_eq!(
-            eval_string("(cdr (list 1 2 3))").unwrap(),
-            Value::List(vec![Value::Number(2), Value::Number(3)])
-        );
-        assert_eq!(
-            eval_string("(cons 1 (list 2 3))").unwrap(),
-            Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)])
-        );
-    }
-
-    #[test]
-    fn test_logic_operators() {
-        // Test 'and' operator - now requires boolean arguments
-        // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
-        assert!(eval_string("(and)").is_err());
-        assert_eq!(eval_string("(and #t)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(and #f)").unwrap(), Value::Bool(false));
-        assert_eq!(eval_string("(and #t #t)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(and #t #f)").unwrap(), Value::Bool(false));
-        assert_eq!(eval_string("(and #f #t)").unwrap(), Value::Bool(false));
-
-        // Test that 'and' rejects non-boolean arguments
-        assert!(eval_string("(and 1 2 3)").is_err()); // should error with non-booleans
-        assert!(eval_string("(and 1 #f 3)").is_err()); // should error with non-booleans
-
-        // Test 'or' operator - now requires boolean arguments
-        // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #f)
-        assert!(eval_string("(or)").is_err());
-        assert_eq!(eval_string("(or #t)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(or #f)").unwrap(), Value::Bool(false));
-        assert_eq!(eval_string("(or #t #f)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(or #f #t)").unwrap(), Value::Bool(true));
-        assert_eq!(eval_string("(or #f #f)").unwrap(), Value::Bool(false));
-
-        // Test that 'or' rejects non-boolean arguments
-        assert!(eval_string("(or #f 2 3)").is_err()); // should error with non-booleans
-        assert!(eval_string("(or 1 2 3)").is_err()); // should error with non-booleans
-
-        // Test 'not' operator - now requires boolean argument
-        assert_eq!(eval_string("(not #t)").unwrap(), Value::Bool(false));
-        assert_eq!(eval_string("(not #f)").unwrap(), Value::Bool(true));
-
-        // Test that 'not' rejects non-boolean arguments
-        assert!(eval_string("(not ())").is_err()); // should error with non-boolean
-        assert!(eval_string("(not 0)").is_err()); // should error with non-boolean
-        assert!(eval_string("(not 42)").is_err()); // should error with non-boolean
-        assert!(eval_string("(not \"hello\")").is_err()); // should error with non-boolean
-
-        // Test complex combinations (all with booleans)
-        assert_eq!(
-            eval_string("(and (or #f #t) (not #f))").unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            eval_string("(or (and #f #t) (not #f))").unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(eval_string("(not (and #t #f))").unwrap(), Value::Bool(true));
+        assert_eq!(eval(&lookup_expr, &mut env).unwrap(), val(42));
     }
 
     #[test]
@@ -590,22 +633,19 @@ mod tests {
         #[test]
         fn test_special_forms_via_precompiled_ops() {
             // Special forms should work through PrecompiledOps in main eval()
-            assert_eq!(
-                eval_string("(quote foo)").unwrap(),
-                Value::Symbol("foo".to_string())
-            );
-            assert_eq!(eval_string("(if #t 1 2)").unwrap(), Value::Number(1));
-            assert_eq!(eval_string("(and #t #t)").unwrap(), Value::Bool(true));
-            assert_eq!(eval_string("(or #f #t)").unwrap(), Value::Bool(true));
+            assert_eq!(eval_string("(quote foo)").unwrap(), sym("foo"));
+            assert_eq!(eval_string("(if #t 1 2)").unwrap(), val(1));
+            assert_eq!(eval_string("(and #t #t)").unwrap(), val(true));
+            assert_eq!(eval_string("(or #f #t)").unwrap(), val(true));
         }
 
         #[test]
         fn test_builtin_functions_via_precompiled_ops() {
             // Builtin functions should work through PrecompiledOps (fast path)
-            assert_eq!(eval_string("(+ 1 2 3)").unwrap(), Value::Number(6));
-            assert_eq!(eval_string("(* 2 3 4)").unwrap(), Value::Number(24));
-            assert_eq!(eval_string("(equal? 5 5)").unwrap(), Value::Bool(true));
-            assert_eq!(eval_string("(not #f)").unwrap(), Value::Bool(true));
+            assert_eq!(eval_string("(+ 1 2 3)").unwrap(), val(6));
+            assert_eq!(eval_string("(* 2 3 4)").unwrap(), val(24));
+            assert_eq!(eval_string("(equal? 5 5)").unwrap(), val(true));
+            assert_eq!(eval_string("(not #f)").unwrap(), val(true));
         }
 
         #[test]
@@ -617,12 +657,12 @@ mod tests {
             // Store a reference to + in a variable, then call it
             eval(&parse("(define my-add +)").unwrap(), &mut env).unwrap();
             let result = eval(&parse("(my-add 10 20)").unwrap(), &mut env).unwrap();
-            assert_eq!(result, Value::Number(30));
+            assert_eq!(result, val(30));
 
             // Store reference to equal? and call it
             eval(&parse("(define my-eq equal?)").unwrap(), &mut env).unwrap();
             let result = eval(&parse("(my-eq 5 5)").unwrap(), &mut env).unwrap();
-            assert_eq!(result, Value::Bool(true));
+            assert_eq!(result, val(true));
         }
 
         #[test]
@@ -632,7 +672,7 @@ mod tests {
 
             // Define a lambda and call it immediately
             let result = eval(&parse("((lambda (x y) (+ x y)) 3 4)").unwrap(), &mut env).unwrap();
-            assert_eq!(result, Value::Number(7));
+            assert_eq!(result, val(7));
 
             // Define a lambda, store it, and call it
             eval(
@@ -641,7 +681,7 @@ mod tests {
             )
             .unwrap();
             let result = eval(&parse("(add-one 42)").unwrap(), &mut env).unwrap();
-            assert_eq!(result, Value::Number(43));
+            assert_eq!(result, val(43));
         }
 
         #[test]
@@ -651,9 +691,9 @@ mod tests {
             match result {
                 Value::List(elements) => {
                     assert_eq!(elements.len(), 3);
-                    assert_eq!(elements[0], Value::Symbol("+".to_string()));
-                    assert_eq!(elements[1], Value::Number(1));
-                    assert_eq!(elements[2], Value::Number(2));
+                    assert_eq!(elements[0], sym("+"));
+                    assert_eq!(elements[1], val(1));
+                    assert_eq!(elements[2], val(2));
                     // Critically: this should NOT be a PrecompiledOp
                     for elem in &elements {
                         if let Value::PrecompiledOp { .. } = elem {
@@ -679,17 +719,11 @@ mod tests {
             eval(&parse("(define flag #t)").unwrap(), &mut env).unwrap();
             eval(&parse("(define name \"test\")").unwrap(), &mut env).unwrap();
 
-            assert_eq!(
-                eval(&parse("x").unwrap(), &mut env).unwrap(),
-                Value::Number(42)
-            );
-            assert_eq!(
-                eval(&parse("flag").unwrap(), &mut env).unwrap(),
-                Value::Bool(true)
-            );
+            assert_eq!(eval(&parse("x").unwrap(), &mut env).unwrap(), val(42));
+            assert_eq!(eval(&parse("flag").unwrap(), &mut env).unwrap(), val(true));
             assert_eq!(
                 eval(&parse("name").unwrap(), &mut env).unwrap(),
-                Value::String("test".to_string())
+                val("test")
             );
 
             // Define and retrieve builtin functions
@@ -711,14 +745,14 @@ mod tests {
             // Test that expressions in operator position are evaluated correctly
             // ((if #t + *) 2 3) should evaluate the if, get +, then apply it
             let result = eval(&parse("((if #t + *) 2 3)").unwrap(), &mut env).unwrap();
-            assert_eq!(result, Value::Number(5)); // + was chosen, 2 + 3 = 5
+            assert_eq!(result, val(5)); // + was chosen, 2 + 3 = 5
 
             let result = eval(&parse("((if #f + *) 2 3)").unwrap(), &mut env).unwrap();
-            assert_eq!(result, Value::Number(6)); // * was chosen, 2 * 3 = 6
+            assert_eq!(result, val(6)); // * was chosen, 2 * 3 = 6
 
             // Test lambda in operator position
             let result = eval(&parse("((lambda (x) (* x x)) 4)").unwrap(), &mut env).unwrap();
-            assert_eq!(result, Value::Number(16)); // 4 * 4 = 16
+            assert_eq!(result, val(16)); // 4 * 4 = 16
         }
 
         #[test]
@@ -740,7 +774,7 @@ mod tests {
             // - + (builtin via PrecompiledOp)
             let result =
                 eval(&parse("(if (> 5 3) (square (+ 2 1)) 0)").unwrap(), &mut env).unwrap();
-            assert_eq!(result, Value::Number(9)); // (+ 2 1) = 3, square(3) = 9
+            assert_eq!(result, val(9)); // (+ 2 1) = 3, square(3) = 9
         }
 
         #[test]
@@ -766,12 +800,9 @@ mod tests {
         #[test]
         fn test_self_evaluating_forms() {
             // Ensure PrecompiledOp is NOT self-evaluating (confirmed by its absence from the match)
-            assert_eq!(eval_string("42").unwrap(), Value::Number(42));
-            assert_eq!(eval_string("#t").unwrap(), Value::Bool(true));
-            assert_eq!(
-                eval_string("\"hello\"").unwrap(),
-                Value::String("hello".to_string())
-            );
+            assert_eq!(eval_string("42").unwrap(), val(42));
+            assert_eq!(eval_string("#t").unwrap(), val(true));
+            assert_eq!(eval_string("\"hello\"").unwrap(), val("hello"));
 
             // BuiltinFunction and Function are self-evaluating
             let mut env = create_global_env();
