@@ -50,7 +50,7 @@
 //! 5. **Add comprehensive tests** covering edge cases and error conditions
 
 use crate::SchemeError;
-use crate::ast::{Value, nil, sym, val};
+use crate::ast::Value;
 use crate::evaluator::{
     Environment, eval_and, eval_define, eval_if, eval_lambda, eval_or, eval_quote,
 };
@@ -323,7 +323,23 @@ pub fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
         [first, second] => {
             // Scheme's equal? is structural equality for all types
-            Ok(Value::Bool(first == second))
+            // JSONLOGIC-STRICT: Reject type coercion - require same types for equality
+            match (first, second) {
+                (Value::Bool(_), Value::Bool(_))
+                | (Value::Number(_), Value::Number(_))
+                | (Value::String(_), Value::String(_))
+                | (Value::Symbol(_), Value::Symbol(_))
+                | (Value::List(_), Value::List(_)) => {
+                    // Same types - use structural equality
+                    Ok(Value::Bool(first == second))
+                }
+                _ => {
+                    // Different types or non-comparable types - reject type coercion
+                    Err(SchemeError::TypeError(
+                        "JSONLOGIC-STRICT: Equality comparison requires arguments of the same comparable type (no type coercion)".to_string(),
+                    ))
+                }
+            }
         }
         _ => Err(SchemeError::arity_error(2, args.len())),
     }
@@ -529,6 +545,7 @@ pub fn find_jsonlogic_op(id: &str) -> Option<&'static BuiltinOp> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::{nil, val};
 
     #[test]
     fn test_builtin_ops_registry() {
@@ -608,10 +625,38 @@ mod tests {
 
     #[test]
     fn test_builtin_function_implementations() {
+        type TestCase = (Result<Value, SchemeError>, Option<Value>);
+
+        // =================================================================
+        // DYNAMIC TEST DATA SETUP
+        // =================================================================
+
         // Pre-declare list for tests that need variable reuse
         let int_list = val([1, 2, 3]);
 
-        let test_cases = [
+        // Arithmetic edge case data
+        let many_ones: Vec<Value> = (0..100).map(|_| val(1)).collect();
+
+        // Comparison edge case data
+        let all_fives: Vec<Value> = (0..10).map(|_| val(5)).collect();
+        let mut mostly_fives = all_fives.clone();
+        mostly_fives.push(val(6));
+
+        // List operations data
+        let nested = val([val([val([1])])]);
+        let mixed = val([val(1), val("hello"), val(true), nil()]);
+        let many_elements: Vec<Value> = (0..50).map(|i| val(i)).collect();
+
+        // Equality test data
+        let complex1 = val([val(1), val("test"), val([val(2)])]);
+        let complex2 = val([val(1), val("test"), val([val(2)])]);
+        let complex3 = val([val(1), val("test"), val([val(3)])]);
+
+        let test_cases: Vec<TestCase> = vec![
+            // =================================================================
+            // BASIC ARITHMETIC FUNCTIONS
+            // =================================================================
+
             // Test arithmetic functions - addition
             (builtin_add(&[]), Some(val(0))),       // Identity
             (builtin_add(&[val(5)]), Some(val(5))), // Single number
@@ -643,43 +688,43 @@ mod tests {
             (builtin_mul(&[val("not a number")]), None),
             (builtin_mul(&[val(2), nil()]), None),
             // Test comparison functions - greater than
-            (builtin_gt(&[val(5), val(3)]), Some(val(true))),
-            (builtin_gt(&[val(3), val(5)]), Some(val(false))),
-            (builtin_gt(&[val(5), val(5)]), Some(val(false))), // Equal case
+            (builtin_gt(&[val(7), val(3)]), Some(val(true))),
+            (builtin_gt(&[val(3), val(8)]), Some(val(false))),
+            (builtin_gt(&[val(4), val(4)]), Some(val(false))), // Equal case
             (builtin_gt(&[val(-1), val(-2)]), Some(val(true))), // Negative numbers
-            // Test chaining behavior: 5 > 3 > 1 should be true since all adjacent pairs satisfy >
-            (builtin_gt(&[val(5), val(3), val(1)]), Some(val(true))), // Chaining true
-            // Test chaining that should fail: 5 > 3 > 4 should be false since 3 > 4 is false
-            (builtin_gt(&[val(5), val(3), val(4)]), Some(val(false))), // Chaining false
+            // Test chaining behavior: 9 > 6 > 2 should be true since all adjacent pairs satisfy >
+            (builtin_gt(&[val(9), val(6), val(2)]), Some(val(true))), // Chaining true
+            // Test chaining that should fail: 9 > 6 > 7 should be false since 6 > 7 is false
+            (builtin_gt(&[val(9), val(6), val(7)]), Some(val(false))), // Chaining false
             // Test comparison error cases (wrong number of args or wrong types)
             (builtin_gt(&[val(5)]), None),           // Too few args
             (builtin_gt(&[val("a"), val(3)]), None), // Wrong type
             // Test comparison functions - greater than or equal
-            (builtin_ge(&[val(5), val(3)]), Some(val(true))),
-            (builtin_ge(&[val(3), val(5)]), Some(val(false))),
-            (builtin_ge(&[val(5), val(5)]), Some(val(true))), // Equal case
+            (builtin_ge(&[val(8), val(3)]), Some(val(true))),
+            (builtin_ge(&[val(2), val(6)]), Some(val(false))),
+            (builtin_ge(&[val(7), val(7)]), Some(val(true))), // Equal case
             // Test comparison functions - less than
-            (builtin_lt(&[val(3), val(5)]), Some(val(true))),
-            (builtin_lt(&[val(5), val(3)]), Some(val(false))),
-            (builtin_lt(&[val(5), val(5)]), Some(val(false))), // Equal case
+            (builtin_lt(&[val(2), val(9)]), Some(val(true))),
+            (builtin_lt(&[val(8), val(4)]), Some(val(false))),
+            (builtin_lt(&[val(6), val(6)]), Some(val(false))), // Equal case
             // Test numeric comparison chaining: 1 < 2 < 3 (all adjacent pairs satisfy <)
             (builtin_lt(&[val(1), val(2), val(3)]), Some(val(true))), // Chaining true
             // Test chaining that should fail: 1 < 3 but not 3 < 2
             (builtin_lt(&[val(1), val(3), val(2)]), Some(val(false))), // Chaining false
             // Test comparison functions - less than or equal
-            (builtin_le(&[val(3), val(5)]), Some(val(true))),
-            (builtin_le(&[val(5), val(3)]), Some(val(false))),
-            (builtin_le(&[val(5), val(5)]), Some(val(true))), // Equal case
+            (builtin_le(&[val(4), val(9)]), Some(val(true))),
+            (builtin_le(&[val(8), val(2)]), Some(val(false))),
+            (builtin_le(&[val(3), val(3)]), Some(val(true))), // Equal case
             // Test numeric equality
-            (builtin_eq(&[val(5), val(5)]), Some(val(true))),
-            (builtin_eq(&[val(5), val(3)]), Some(val(false))),
+            (builtin_eq(&[val(12), val(12)]), Some(val(true))),
+            (builtin_eq(&[val(8), val(3)]), Some(val(false))),
             (builtin_eq(&[val(0), val(0)]), Some(val(true))),
             (builtin_eq(&[val(-1), val(-1)]), Some(val(true))),
-            (builtin_eq(&[val(5), val(5), val(5)]), Some(val(true))), // 5 = 5 = 5 (all equal)
-            (builtin_eq(&[val(5), val(5), val(3)]), Some(val(false))), // 5 = 5 but not 5 = 3
+            (builtin_eq(&[val(7), val(7), val(7)]), Some(val(true))), // 7 = 7 = 7 (all equal)
+            (builtin_eq(&[val(9), val(9), val(4)]), Some(val(false))), // 9 = 9 but not 9 = 4
             // Test structural equality (equal?)
-            (builtin_equal(&[val(5), val(5)]), Some(val(true))),
-            (builtin_equal(&[val(5), val(3)]), Some(val(false))),
+            (builtin_equal(&[val(11), val(11)]), Some(val(true))),
+            (builtin_equal(&[val(15), val(3)]), Some(val(false))),
             (
                 builtin_equal(&[val("hello"), val("hello")]),
                 Some(val(true)),
@@ -692,7 +737,7 @@ mod tests {
             (builtin_equal(&[val(true), val(false)]), Some(val(false))),
             (builtin_equal(&[nil(), nil()]), Some(val(true))),
             (builtin_equal(&[val([1]), val([1])]), Some(val(true))),
-            (builtin_equal(&[val(5), val("5")]), Some(val(false))), // Different types
+            (builtin_equal(&[val(5), val("5")]), None), // Different types - now rejected
             // Test equal? error cases (structural equality requires exactly 2 args)
             (builtin_equal(&[val(5)]), None), // Too few args
             (builtin_equal(&[val(5), val(3), val(1)]), None), // Too many args
@@ -765,24 +810,135 @@ mod tests {
                 builtin_error(&[val("Error:"), val("Something went wrong")]),
                 None,
             ), // Multiple args
+            // =================================================================
+            // ARITHMETIC EDGE CASES
+            // =================================================================
+
+            // Integer overflow cases (should fail)
+            (builtin_add(&[val(i64::MAX), val(1)]), None), // Addition overflow
+            (builtin_mul(&[val(i64::MAX), val(2)]), None), // Multiplication overflow
+            (builtin_sub(&[val(i64::MIN)]), None),         // Negation overflow
+            (builtin_sub(&[val(i64::MIN), val(1)]), None), // Subtraction overflow
+            // Boundary values (should succeed)
+            (builtin_add(&[val(i64::MAX), val(0)]), Some(val(i64::MAX))),
+            (builtin_sub(&[val(i64::MIN), val(0)]), Some(val(i64::MIN))),
+            (builtin_mul(&[val(i64::MAX), val(1)]), Some(val(i64::MAX))),
+            (builtin_mul(&[val(0), val(i64::MAX)]), Some(val(0))),
+            // Operations with zero
+            (builtin_add(&[val(0)]), Some(val(0))),
+            (builtin_sub(&[val(0)]), Some(val(0))),
+            (builtin_mul(&[val(0)]), Some(val(0))),
+            // Large chain operations
+            (builtin_add(&many_ones), Some(val(100))),
+            (builtin_mul(&many_ones), Some(val(1))),
+            // =================================================================
+            // COMPARISON EDGE CASES
+            // =================================================================
+
+            // Boundary comparisons
+            (builtin_gt(&[val(i64::MAX), val(i64::MIN)]), Some(val(true))),
+            (builtin_lt(&[val(i64::MIN), val(i64::MAX)]), Some(val(true))),
+            (builtin_ge(&[val(i64::MAX), val(i64::MAX)]), Some(val(true))),
+            (builtin_le(&[val(i64::MIN), val(i64::MIN)]), Some(val(true))),
+            // Long chain comparisons
+            (
+                builtin_lt(&[val(-5), val(-2), val(0), val(3), val(10)]),
+                Some(val(true)),
+            ),
+            (
+                builtin_gt(&[val(10), val(5), val(0), val(-3), val(-8)]),
+                Some(val(true)),
+            ),
+            (builtin_lt(&[val(1), val(2), val(1)]), Some(val(false))), // 2 > 1 fails
+            // Numeric equality with many values
+            (builtin_eq(&all_fives), Some(val(true))),
+            (builtin_eq(&mostly_fives), Some(val(false))),
+            // =================================================================
+            // LIST OPERATIONS EDGE CASES
+            // =================================================================
+
+            // Deeply nested lists
+            (builtin_car(&[nested]), Some(val([val([1])]))),
+            // Mixed type lists operations
+            (builtin_car(&[mixed.clone()]), Some(val(1))),
+            (
+                builtin_cdr(&[mixed.clone()]),
+                Some(val([val("hello"), val(true), nil()])),
+            ),
+            // Cons with various types
+            (
+                builtin_cons(&[val(true), val([val(1), val(2)])]),
+                Some(val([val(true), val(1), val(2)])),
+            ),
+            // List creation with many elements
+            (
+                builtin_list(&many_elements),
+                Some(val((0..50).map(|i| val(i)).collect::<Vec<_>>())),
+            ),
+            // =================================================================
+            // EQUALITY STRICT TYPING - OVERRIDE BASIC EQUAL TESTS
+            // =================================================================
+
+            // Type coercion rejection (these should fail)
+            (builtin_equal(&[val(1), val("1")]), None),
+            (builtin_equal(&[val(0), val(false)]), None),
+            (builtin_equal(&[val(true), val(1)]), None),
+            (builtin_equal(&[val(""), nil()]), None),
+            (builtin_equal(&[val(Vec::<Value>::new()), val(false)]), None),
+            // Complex same-type structures
+            (
+                builtin_equal(&[complex1.clone(), complex2]),
+                Some(val(true)),
+            ),
+            (builtin_equal(&[complex1, complex3]), Some(val(false))),
+            // =================================================================
+            // LOGICAL OPERATIONS STRICT - ADDITIONAL ERROR CASES
+            // =================================================================
+
+            // Non-boolean inputs should fail
+            (builtin_not(&[val(0)]), None),
+            (builtin_not(&[val("")]), None),
+            (builtin_not(&[nil()]), None),
+            (builtin_not(&[val("false")]), None),
         ];
 
-        for (expression, expected_result) in test_cases {
-            match expression {
-                Ok(result) => assert_eq!(Some(result), expected_result),
-                Err(_) => assert_eq!(expected_result, None),
+        for (result, expected) in test_cases {
+            match (result, expected) {
+                (Ok(actual), Some(expected_val)) => {
+                    assert_eq!(actual, expected_val, "Failed for actual: {:?}", actual);
+                }
+                (Err(_), None) => {} // Expected error
+                (actual, expected) => panic!(
+                    "Unexpected result: got {:?}, expected {:?}",
+                    actual.is_ok(),
+                    expected.is_some()
+                ),
             }
         }
+    }
 
-        // Verify error messages are constructed correctly (can't be in array because needs specific match)
-        match builtin_error(&[val("test message")]).unwrap_err() {
-            SchemeError::EvalError(msg) => assert_eq!(msg, "test message"),
-            _ => panic!("Expected EvalError with specific message"),
-        }
+    #[test]
+    fn test_error_message_construction() {
+        type ErrorTest = (Vec<Value>, &'static str);
+        let test_cases: Vec<ErrorTest> = vec![
+            (vec![val("Simple message")], "Simple message"),
+            (
+                vec![val("Code:"), val(404), val("Not Found")],
+                "Code: 404 Not Found",
+            ),
+            (
+                vec![val(true), val(42), val("mixed"), nil()],
+                "#t 42 mixed ()",
+            ),
+        ];
 
-        match builtin_error(&[val("Error:"), val(404)]).unwrap_err() {
-            SchemeError::EvalError(msg) => assert_eq!(msg, "Error: 404"),
-            _ => panic!("Expected EvalError with concatenated message"),
+        for (args, expected_msg) in test_cases {
+            match builtin_error(&args).unwrap_err() {
+                SchemeError::EvalError(msg) => {
+                    assert_eq!(msg, expected_msg, "Failed for args: {:?}", args)
+                }
+                _ => panic!("Expected EvalError for args: {:?}", args),
+            }
         }
     }
 

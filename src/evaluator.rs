@@ -259,6 +259,19 @@ pub fn eval_lambda(args: &[Value], env: &mut Environment) -> Result<Value, Schem
     }
 }
 
+/// Check if a value is obviously non-boolean (before evaluation)
+/// This catches literals and some obvious cases, but can't check function call results
+fn is_obviously_non_boolean(value: &Value) -> bool {
+    match value {
+        Value::Bool(_) => false,                               // Obviously boolean
+        Value::Number(_) | Value::String(_) => true,           // Obviously non-boolean
+        Value::List(_) | Value::PrecompiledOp { .. } => false, // Could be function calls that return booleans
+        Value::Symbol(_) => false,                             // Could be a boolean variable
+        Value::Unspecified => true,                            // Obviously non-boolean
+        Value::BuiltinFunction { .. } | Value::Function { .. } => false, // Functions could return booleans
+    }
+}
+
 /// Evaluate and special form (strict boolean evaluation)
 pub fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
     // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
@@ -266,7 +279,17 @@ pub fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeEr
         return Err(SchemeError::arity_error(1, 0));
     }
 
-    // Evaluate each argument and require it to be a boolean
+    // First pass: check for obviously non-boolean arguments before evaluation, so that short-circuit evaluation doesn't hide gross errors
+    for arg in args.iter() {
+        if is_obviously_non_boolean(arg) {
+            return Err(SchemeError::TypeError(
+                "SCHEME-JSONLOGIC-STRICT: 'and' requires boolean arguments (no truthiness)"
+                    .to_string(),
+            ));
+        }
+    }
+
+    // Second pass: evaluate each argument and require it to be a boolean
     for arg in args.iter() {
         let result = eval(arg, env)?;
 
@@ -275,7 +298,8 @@ pub fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeEr
             Value::Bool(true) => continue,
             _ => {
                 return Err(SchemeError::TypeError(
-                    "SCHEME-JSONLOGIC-STRICT: and requires boolean arguments".to_string(),
+                    "SCHEME-JSONLOGIC-STRICT: 'and' requires boolean arguments (no truthiness)"
+                        .to_string(),
                 ));
             }
         }
@@ -292,7 +316,18 @@ pub fn eval_or(args: &[Value], env: &mut Environment) -> Result<Value, SchemeErr
         return Err(SchemeError::arity_error(1, 0));
     }
 
-    // Evaluate each argument and require it to be a boolean
+    // First pass: check for obviously non-boolean arguments before evaluation, so that short-circuit evaluation doesn't hide gross errors
+
+    for arg in args.iter() {
+        if is_obviously_non_boolean(arg) {
+            return Err(SchemeError::TypeError(
+                "SCHEME-JSONLOGIC-STRICT: 'or' requires boolean arguments (no truthiness)"
+                    .to_string(),
+            ));
+        }
+    }
+
+    // Second pass: evaluate each argument and require it to be a boolean
     for arg in args {
         let result = eval(arg, env)?;
 
@@ -301,7 +336,8 @@ pub fn eval_or(args: &[Value], env: &mut Environment) -> Result<Value, SchemeErr
             Value::Bool(false) => continue,
             _ => {
                 return Err(SchemeError::TypeError(
-                    "SCHEME-JSONLOGIC-STRICT: or requires boolean arguments".to_string(),
+                    "SCHEME-JSONLOGIC-STRICT: 'or' requires boolean arguments (no truthiness)"
+                        .to_string(),
                 ));
             }
         }
@@ -859,6 +895,249 @@ mod tests {
 
             // The absence of PrecompiledOp match arm in eval_list is justified
             // because PrecompiledOps are consumed by main eval(), never produced
+        }
+
+        #[test]
+        fn test_and_or_strict_boolean_validation() {
+            let mut env = create_global_env();
+
+            // Valid boolean operations
+            assert_eq!(
+                eval(&parse("(and #t #t)").unwrap(), &mut env).unwrap(),
+                Value::Bool(true)
+            );
+            assert_eq!(
+                eval(&parse("(and #f #t)").unwrap(), &mut env).unwrap(),
+                Value::Bool(false)
+            );
+            assert_eq!(
+                eval(&parse("(or #f #f)").unwrap(), &mut env).unwrap(),
+                Value::Bool(false)
+            );
+            assert_eq!(
+                eval(&parse("(or #t #f)").unwrap(), &mut env).unwrap(),
+                Value::Bool(true)
+            );
+
+            // Invalid: obvious non-booleans should fail
+            assert!(eval(&parse("(and 1 #t)").unwrap(), &mut env).is_err());
+            assert!(eval(&parse("(and \"hello\" #t)").unwrap(), &mut env).is_err());
+            assert!(eval(&parse("(or #t 42)").unwrap(), &mut env).is_err());
+            assert!(eval(&parse("(or \"false\" #f)").unwrap(), &mut env).is_err());
+
+            // Invalid: function calls that return non-booleans
+            assert!(eval(&parse("(and (+ 1 2) #t)").unwrap(), &mut env).is_err());
+            assert!(eval(&parse("(or #f (car '(hello)))").unwrap(), &mut env).is_err());
+
+            // Edge case: short-circuiting still validates all args first
+            assert!(eval(&parse("(and #f 123)").unwrap(), &mut env).is_err());
+            assert!(eval(&parse("(or #t \"not-bool\")").unwrap(), &mut env).is_err());
+        }
+
+        #[test]
+        fn test_if_special_form_strict() {
+            let mut env = create_global_env();
+
+            // Valid if expressions
+            assert_eq!(
+                eval(&parse("(if #t 42 0)").unwrap(), &mut env).unwrap(),
+                Value::Number(42)
+            );
+            assert_eq!(
+                eval(&parse("(if #f 42 0)").unwrap(), &mut env).unwrap(),
+                Value::Number(0)
+            );
+            assert_eq!(
+                eval(&parse("(if (> 5 3) \"big\" \"small\")").unwrap(), &mut env).unwrap(),
+                Value::String("big".to_string())
+            );
+
+            // Invalid: non-boolean conditions
+            assert!(eval(&parse("(if 1 42 0)").unwrap(), &mut env).is_err());
+            assert!(eval(&parse("(if \"hello\" 42 0)").unwrap(), &mut env).is_err());
+            assert!(eval(&parse("(if () 42 0)").unwrap(), &mut env).is_err());
+
+            // Valid: complex conditions that evaluate to booleans
+            assert_eq!(
+                eval(&parse("(if (and #t #t) 42 0)").unwrap(), &mut env).unwrap(),
+                Value::Number(42)
+            );
+            assert_eq!(
+                eval(&parse("(if (not #f) 42 0)").unwrap(), &mut env).unwrap(),
+                Value::Number(42)
+            );
+
+            // Arity errors are caught at parse time, not evaluation time
+            assert!(parse("(if #t 42)").is_err()); // Too few args
+            assert!(parse("(if #t 42 0 extra)").is_err()); // Too many args
+            assert!(parse("(if)").is_err()); // No args
+        }
+
+        #[test]
+        fn test_lambda_and_define_edge_cases() {
+            let mut env = create_global_env();
+
+            // Test lambda with various parameter patterns
+            eval(&parse("(define id (lambda (x) x))").unwrap(), &mut env).unwrap();
+            assert_eq!(eval(&parse("(id 42)").unwrap(), &mut env).unwrap(), val(42));
+
+            // Test lambda with multiple parameters
+            eval(
+                &parse("(define add3 (lambda (a b c) (+ a b c)))").unwrap(),
+                &mut env,
+            )
+            .unwrap();
+            assert_eq!(
+                eval(&parse("(add3 1 2 3)").unwrap(), &mut env).unwrap(),
+                val(6)
+            );
+
+            // Test lambda with no parameters
+            eval(&parse("(define const42 (lambda () 42))").unwrap(), &mut env).unwrap();
+            assert_eq!(
+                eval(&parse("(const42)").unwrap(), &mut env).unwrap(),
+                val(42)
+            );
+
+            // Test closures capture environment
+            eval(&parse("(define x 10)").unwrap(), &mut env).unwrap();
+            eval(
+                &parse("(define add-x (lambda (y) (+ x y)))").unwrap(),
+                &mut env,
+            )
+            .unwrap();
+            assert_eq!(
+                eval(&parse("(add-x 5)").unwrap(), &mut env).unwrap(),
+                val(15)
+            );
+
+            // Test nested lambdas
+            eval(
+                &parse("(define make-adder (lambda (n) (lambda (x) (+ n x))))").unwrap(),
+                &mut env,
+            )
+            .unwrap();
+            eval(&parse("(define add5 (make-adder 5))").unwrap(), &mut env).unwrap();
+            assert_eq!(eval(&parse("(add5 3)").unwrap(), &mut env).unwrap(), val(8));
+
+            // Test lambda arity checking
+            assert!(eval(&parse("(id)").unwrap(), &mut env).is_err()); // Too few args
+            assert!(eval(&parse("(id 1 2)").unwrap(), &mut env).is_err()); // Too many args
+
+            // Test define with function values
+            eval(&parse("(define plus +)").unwrap(), &mut env).unwrap();
+            assert_eq!(
+                eval(&parse("(plus 2 3)").unwrap(), &mut env).unwrap(),
+                val(5)
+            );
+
+            // Test redefining variables
+            eval(&parse("(define y 100)").unwrap(), &mut env).unwrap();
+            assert_eq!(eval(&parse("y").unwrap(), &mut env).unwrap(), val(100));
+            eval(&parse("(define y 200)").unwrap(), &mut env).unwrap();
+            assert_eq!(eval(&parse("y").unwrap(), &mut env).unwrap(), val(200));
+        }
+
+        #[test]
+        fn test_quote_and_symbolic_data() {
+            let mut env = create_global_env();
+
+            // Test basic quoting
+            assert_eq!(
+                eval(&parse("(quote hello)").unwrap(), &mut env).unwrap(),
+                sym("hello")
+            );
+            assert_eq!(
+                eval(&parse("'hello").unwrap(), &mut env).unwrap(),
+                sym("hello")
+            );
+
+            // Test quoted lists
+            assert_eq!(
+                eval(&parse("'(1 2 3)").unwrap(), &mut env).unwrap(),
+                val([val(1), val(2), val(3)])
+            );
+
+            // Test nested quoted structures
+            assert_eq!(
+                eval(&parse("'(+ 1 2)").unwrap(), &mut env).unwrap(),
+                val([sym("+"), val(1), val(2)])
+            );
+
+            // Test that quoted expressions don't evaluate
+            assert_eq!(
+                eval(&parse("'(undefined-function 123)").unwrap(), &mut env).unwrap(),
+                val([sym("undefined-function"), val(123)])
+            );
+
+            // Test quote with various data types
+            assert_eq!(eval(&parse("'42").unwrap(), &mut env).unwrap(), val(42));
+            assert_eq!(eval(&parse("'#t").unwrap(), &mut env).unwrap(), val(true));
+            assert_eq!(
+                eval(&parse("'\"string\"").unwrap(), &mut env).unwrap(),
+                val("string")
+            );
+        }
+
+        #[test]
+        fn test_error_propagation_and_handling() {
+            let mut env = create_global_env();
+
+            // Test undefined variable errors
+            assert!(eval(&parse("undefined-var").unwrap(), &mut env).is_err());
+
+            // Test arity errors propagate through calls
+            assert!(parse("(car 1 2)").is_err()); // Wrong arity for car (caught at parse time)
+
+            // Test type errors propagate through calls
+            assert!(eval(&parse("(not 42)").unwrap(), &mut env).is_err()); // Type error
+            assert!(eval(&parse("(car \"not-a-list\")").unwrap(), &mut env).is_err()); // Type error
+
+            // Test errors in nested expressions
+            assert!(eval(&parse("(+ 1 (car \"not-a-list\"))").unwrap(), &mut env).is_err());
+            assert!(eval(&parse("(if (not 42) 1 2)").unwrap(), &mut env).is_err());
+
+            // Test lambda parameter errors
+            assert!(eval(&parse("(lambda (x x) x)").unwrap(), &mut env).is_err()); // Duplicate params
+            assert!(eval(&parse("(lambda \"not-a-list\" 42)").unwrap(), &mut env).is_err()); // Invalid params
+
+            // Test define errors
+            assert!(eval(&parse("(define 123 42)").unwrap(), &mut env).is_err()); // Invalid var name
+            assert!(eval(&parse("(define \"not-symbol\" 42)").unwrap(), &mut env).is_err()); // Invalid var name
+        }
+
+        #[test]
+        fn test_environment_scoping_edge_cases() {
+            let mut env = create_global_env();
+
+            // Test global vs local scope
+            eval(&parse("(define x 1)").unwrap(), &mut env).unwrap();
+            eval(
+                &parse("(define f (lambda (x) (+ x 10)))").unwrap(),
+                &mut env,
+            )
+            .unwrap();
+            assert_eq!(eval(&parse("(f 5)").unwrap(), &mut env).unwrap(), val(15));
+            assert_eq!(eval(&parse("x").unwrap(), &mut env).unwrap(), val(1)); // Global x unchanged
+
+            // Test closure behavior with variable redefinition
+            eval(&parse("(define y 100)").unwrap(), &mut env).unwrap();
+            eval(&parse("(define g (lambda () y))").unwrap(), &mut env).unwrap();
+            eval(&parse("(define y 200)").unwrap(), &mut env).unwrap(); // Redefine y
+            // This implementation uses lexical scoping - closures see binding at definition time
+            assert_eq!(eval(&parse("(g)").unwrap(), &mut env).unwrap(), val(100));
+
+            // Test nested function definitions
+            eval(
+                &parse("(define outer (lambda (a) (lambda (b) (+ a b))))").unwrap(),
+                &mut env,
+            )
+            .unwrap();
+            eval(&parse("(define add10 (outer 10))").unwrap(), &mut env).unwrap();
+            assert_eq!(
+                eval(&parse("(add10 5)").unwrap(), &mut env).unwrap(),
+                val(15)
+            );
         }
     }
 }
