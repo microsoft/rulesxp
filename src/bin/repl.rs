@@ -77,12 +77,9 @@ fn main() {
                         match parse_scheme(line) {
                             Ok(expr) => {
                                 // If in JSONLogic mode, show the parsed expression as JSONLogic
-                                if jsonlogic_mode {
-                                    match ast_to_jsonlogic(&expr) {
-                                        Ok(json_str) => println!("→ {}", json_str),
-                                        Err(_) => {} // Skip if conversion fails
-                                    }
-                                }
+                                if jsonlogic_mode && let Ok(json_str) = ast_to_jsonlogic(&expr) {
+                                    println!("→ {}", json_str);
+                                } // Skip if conversion fails
                                 evaluator::eval(&expr, &mut env)
                             }
                             Err(e) => Err(e),

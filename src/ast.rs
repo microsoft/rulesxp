@@ -15,6 +15,11 @@ use crate::builtinops::BuiltinOp;
 /// Note: PrecompiledOps (optimized s-expressions) don't equality-compare to dynamically
 /// generated unoptimized s-expressions. However, since no expression can *return* a
 /// PrecompiledOp (they're consumed during evaluation), this is not a concern for user code.
+///
+/// To build an AST, use the ergonomic helper functions:
+/// - `val(42)` for values, `sym("name")` for symbols, `nil()` for empty lists
+/// - `val([1, 2, 3])` for homogeneous lists
+/// - `val(vec![sym("op"), val(42)])` for mixed lists
 #[derive(Debug, Clone)]
 pub enum Value {
     /// Numbers (integers only)
@@ -106,13 +111,8 @@ impl<T: Into<Value> + Clone> From<&[T]> for Value {
     }
 }
 
-/// To build an AST, use the ergonomic helper functions:
-/// - `val(42)` for values, `sym("name")` for symbols, `nil()` for empty lists
-/// - `val([1, 2, 3])` for homogeneous lists
-/// - `val(vec![sym("op"), val(42)])` for mixed lists
-
-/// Helper function for creating symbols - works great in mixed lists!
-/// Accepts both &str and String via Into<&str>
+///   Helper function for creating symbols - works great in mixed lists!
+///   Accepts both &str and String via Into<&str>
 pub fn sym<S: AsRef<str>>(name: S) -> Value {
     Value::Symbol(name.as_ref().to_string())
 }

@@ -542,10 +542,25 @@ pub fn find_jsonlogic_op(id: &str) -> Option<&'static BuiltinOp> {
     BUILTIN_JSONLOGIC.get(id).copied()
 }
 
+/// Get the quote builtin operation - guaranteed to exist
+pub fn get_quote_op() -> &'static BuiltinOp {
+    find_scheme_op("quote").expect("quote builtin operation must be available")
+}
+
+/// Get the list builtin operation - guaranteed to exist  
+pub fn get_list_op() -> &'static BuiltinOp {
+    find_scheme_op("list").expect("list builtin operation must be available")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ast::{nil, val};
+
+    /// Micro-helper for success cases in comprehensive tests
+    fn success<T: Into<Value>>(value: T) -> Option<Value> {
+        Some(val(value))
+    }
 
     #[test]
     fn test_builtin_ops_registry() {
@@ -623,9 +638,16 @@ mod tests {
         );
     }
 
+    /// Macro to create test cases with identifying information for better error messages
+    macro_rules! test {
+        ($expr:expr, $expected:expr) => {
+            (stringify!($expr), $expr, $expected)
+        };
+    }
+
     #[test]
     fn test_builtin_function_implementations() {
-        type TestCase = (Result<Value, SchemeError>, Option<Value>);
+        type TestCase = (&'static str, Result<Value, SchemeError>, Option<Value>);
 
         // =================================================================
         // DYNAMIC TEST DATA SETUP
@@ -645,7 +667,7 @@ mod tests {
         // List operations data
         let nested = val([val([val([1])])]);
         let mixed = val([val(1), val("hello"), val(true), nil()]);
-        let many_elements: Vec<Value> = (0..50).map(|i| val(i)).collect();
+        let many_elements: Vec<Value> = (0..50).map(val).collect();
 
         // Equality test data
         let complex1 = val([val(1), val("test"), val([val(2)])]);
@@ -658,258 +680,250 @@ mod tests {
             // =================================================================
 
             // Test arithmetic functions - addition
-            (builtin_add(&[]), Some(val(0))),       // Identity
-            (builtin_add(&[val(5)]), Some(val(5))), // Single number
-            (builtin_add(&[val(1), val(2), val(3)]), Some(val(6))), // Multiple numbers
-            (builtin_add(&[val(-5), val(10)]), Some(val(5))), // Negative numbers
-            (builtin_add(&[val(0), val(0), val(0)]), Some(val(0))), // Zeros
+            test!(builtin_add(&[]), success(0)),       // Identity
+            test!(builtin_add(&[val(5)]), success(5)), // Single number
+            test!(builtin_add(&[val(1), val(2), val(3)]), success(6)), // Multiple numbers
+            test!(builtin_add(&[val(-5), val(10)]), success(5)), // Negative numbers
+            test!(builtin_add(&[val(0), val(0), val(0)]), success(0)), // Zeros
             // Test addition error cases
-            (builtin_add(&[val("not a number")]), None), // Invalid type
-            (builtin_add(&[val(1), val(true)]), None),   // Mixed types
+            test!(builtin_add(&[val("not a number")]), None), // Invalid type
+            test!(builtin_add(&[val(1), val(true)]), None),   // Mixed types
             // Test arithmetic functions - subtraction
-            (builtin_sub(&[val(5)]), Some(val(-5))), // Unary minus
-            (builtin_sub(&[val(-5)]), Some(val(5))), // Unary minus of negative
-            (builtin_sub(&[val(10), val(3), val(2)]), Some(val(5))), // Multiple subtraction
-            (builtin_sub(&[val(0), val(5)]), Some(val(-5))), // Zero minus number
-            (builtin_sub(&[val(10), val(0)]), Some(val(10))), // Number minus zero
+            test!(builtin_sub(&[val(5)]), success(-5)), // Unary minus
+            test!(builtin_sub(&[val(-5)]), success(5)), // Unary minus of negative
+            test!(builtin_sub(&[val(10), val(3), val(2)]), success(5)), // Multiple subtraction
+            test!(builtin_sub(&[val(0), val(5)]), success(-5)), // Zero minus number
+            test!(builtin_sub(&[val(10), val(0)]), success(10)), // Number minus zero
             // Test subtraction error cases
-            (builtin_sub(&[]), None), // No arguments
-            (builtin_sub(&[val("not a number")]), None),
-            (builtin_sub(&[val(5), val(false)]), None),
+            test!(builtin_sub(&[]), None), // No arguments
+            test!(builtin_sub(&[val("not a number")]), None),
+            test!(builtin_sub(&[val(5), val(false)]), None),
             // Test arithmetic functions - multiplication
             // SCHEME-STRICT: We require at least 1 argument (Scheme R7RS allows 0 args, returns 1)
-            (builtin_mul(&[]), None), // No arguments should error
-            (builtin_mul(&[val(5)]), Some(val(5))), // Single number
-            (builtin_mul(&[val(2), val(3), val(4)]), Some(val(24))), // Multiple numbers
-            (builtin_mul(&[val(-2), val(3)]), Some(val(-6))), // Negative numbers
-            (builtin_mul(&[val(0), val(100)]), Some(val(0))), // Zero multiplication
-            (builtin_mul(&[val(1), val(1), val(1)]), Some(val(1))), // Ones
+            test!(builtin_mul(&[]), None), // No arguments should error
+            test!(builtin_mul(&[val(5)]), success(5)), // Single number
+            test!(builtin_mul(&[val(2), val(3), val(4)]), success(24)), // Multiple numbers
+            test!(builtin_mul(&[val(-2), val(3)]), success(-6)), // Negative numbers
+            test!(builtin_mul(&[val(0), val(100)]), success(0)), // Zero multiplication
+            test!(builtin_mul(&[val(1), val(1), val(1)]), success(1)), // Ones
             // Test multiplication error cases
-            (builtin_mul(&[val("not a number")]), None),
-            (builtin_mul(&[val(2), nil()]), None),
+            test!(builtin_mul(&[val("not a number")]), None),
+            test!(builtin_mul(&[val(2), nil()]), None),
             // Test comparison functions - greater than
-            (builtin_gt(&[val(7), val(3)]), Some(val(true))),
-            (builtin_gt(&[val(3), val(8)]), Some(val(false))),
-            (builtin_gt(&[val(4), val(4)]), Some(val(false))), // Equal case
-            (builtin_gt(&[val(-1), val(-2)]), Some(val(true))), // Negative numbers
+            test!(builtin_gt(&[val(7), val(3)]), success(true)),
+            test!(builtin_gt(&[val(3), val(8)]), success(false)),
+            test!(builtin_gt(&[val(4), val(4)]), success(false)), // Equal case
+            test!(builtin_gt(&[val(-1), val(-2)]), success(true)), // Negative numbers
             // Test chaining behavior: 9 > 6 > 2 should be true since all adjacent pairs satisfy >
-            (builtin_gt(&[val(9), val(6), val(2)]), Some(val(true))), // Chaining true
+            test!(builtin_gt(&[val(9), val(6), val(2)]), success(true)), // Chaining true
             // Test chaining that should fail: 9 > 6 > 7 should be false since 6 > 7 is false
-            (builtin_gt(&[val(9), val(6), val(7)]), Some(val(false))), // Chaining false
+            test!(builtin_gt(&[val(9), val(6), val(7)]), success(false)), // Chaining false
             // Test comparison error cases (wrong number of args or wrong types)
-            (builtin_gt(&[val(5)]), None),           // Too few args
-            (builtin_gt(&[val("a"), val(3)]), None), // Wrong type
+            test!(builtin_gt(&[val(5)]), None), // Too few args
+            test!(builtin_gt(&[val("a"), val(3)]), None), // Wrong type
             // Test comparison functions - greater than or equal
-            (builtin_ge(&[val(8), val(3)]), Some(val(true))),
-            (builtin_ge(&[val(2), val(6)]), Some(val(false))),
-            (builtin_ge(&[val(7), val(7)]), Some(val(true))), // Equal case
+            test!(builtin_ge(&[val(8), val(3)]), success(true)),
+            test!(builtin_ge(&[val(2), val(6)]), success(false)),
+            test!(builtin_ge(&[val(7), val(7)]), success(true)), // Equal case
             // Test comparison functions - less than
-            (builtin_lt(&[val(2), val(9)]), Some(val(true))),
-            (builtin_lt(&[val(8), val(4)]), Some(val(false))),
-            (builtin_lt(&[val(6), val(6)]), Some(val(false))), // Equal case
+            test!(builtin_lt(&[val(2), val(9)]), success(true)),
+            test!(builtin_lt(&[val(8), val(4)]), success(false)),
+            test!(builtin_lt(&[val(6), val(6)]), success(false)), // Equal case
             // Test numeric comparison chaining: 1 < 2 < 3 (all adjacent pairs satisfy <)
-            (builtin_lt(&[val(1), val(2), val(3)]), Some(val(true))), // Chaining true
+            test!(builtin_lt(&[val(1), val(2), val(3)]), success(true)), // Chaining true
             // Test chaining that should fail: 1 < 3 but not 3 < 2
-            (builtin_lt(&[val(1), val(3), val(2)]), Some(val(false))), // Chaining false
+            test!(builtin_lt(&[val(1), val(3), val(2)]), success(false)), // Chaining false
             // Test comparison functions - less than or equal
-            (builtin_le(&[val(4), val(9)]), Some(val(true))),
-            (builtin_le(&[val(8), val(2)]), Some(val(false))),
-            (builtin_le(&[val(3), val(3)]), Some(val(true))), // Equal case
+            test!(builtin_le(&[val(4), val(9)]), success(true)),
+            test!(builtin_le(&[val(8), val(2)]), success(false)),
+            test!(builtin_le(&[val(3), val(3)]), success(true)), // Equal case
             // Test numeric equality
-            (builtin_eq(&[val(12), val(12)]), Some(val(true))),
-            (builtin_eq(&[val(8), val(3)]), Some(val(false))),
-            (builtin_eq(&[val(0), val(0)]), Some(val(true))),
-            (builtin_eq(&[val(-1), val(-1)]), Some(val(true))),
-            (builtin_eq(&[val(7), val(7), val(7)]), Some(val(true))), // 7 = 7 = 7 (all equal)
-            (builtin_eq(&[val(9), val(9), val(4)]), Some(val(false))), // 9 = 9 but not 9 = 4
+            test!(builtin_eq(&[val(12), val(12)]), success(true)),
+            test!(builtin_eq(&[val(8), val(3)]), success(false)),
+            test!(builtin_eq(&[val(0), val(0)]), success(true)),
+            test!(builtin_eq(&[val(-1), val(-1)]), success(true)),
+            test!(builtin_eq(&[val(7), val(7), val(7)]), success(true)), // 7 = 7 = 7 (all equal)
+            test!(builtin_eq(&[val(9), val(9), val(4)]), success(false)), // 9 = 9 but not 9 = 4
             // Test structural equality (equal?)
-            (builtin_equal(&[val(11), val(11)]), Some(val(true))),
-            (builtin_equal(&[val(15), val(3)]), Some(val(false))),
-            (
-                builtin_equal(&[val("hello"), val("hello")]),
-                Some(val(true)),
-            ),
-            (
-                builtin_equal(&[val("hello"), val("world")]),
-                Some(val(false)),
-            ),
-            (builtin_equal(&[val(true), val(true)]), Some(val(true))),
-            (builtin_equal(&[val(true), val(false)]), Some(val(false))),
-            (builtin_equal(&[nil(), nil()]), Some(val(true))),
-            (builtin_equal(&[val([1]), val([1])]), Some(val(true))),
-            (builtin_equal(&[val(5), val("5")]), None), // Different types - now rejected
+            test!(builtin_equal(&[val(11), val(11)]), success(true)),
+            test!(builtin_equal(&[val(15), val(3)]), success(false)),
+            test!(builtin_equal(&[val("hello"), val("hello")]), success(true)),
+            test!(builtin_equal(&[val("hello"), val("world")]), success(false)),
+            test!(builtin_equal(&[val(true), val(true)]), success(true)),
+            test!(builtin_equal(&[val(true), val(false)]), success(false)),
+            test!(builtin_equal(&[nil(), nil()]), success(true)),
+            test!(builtin_equal(&[val([1]), val([1])]), success(true)),
+            test!(builtin_equal(&[val(5), val("5")]), None), // Different types - now rejected
             // Test equal? error cases (structural equality requires exactly 2 args)
-            (builtin_equal(&[val(5)]), None), // Too few args
-            (builtin_equal(&[val(5), val(3), val(1)]), None), // Too many args
+            test!(builtin_equal(&[val(5)]), None), // Too few args
+            test!(builtin_equal(&[val(5), val(3), val(1)]), None), // Too many args
             // Test logical functions - not
-            (builtin_not(&[val(true)]), Some(val(false))),
-            (builtin_not(&[val(false)]), Some(val(true))),
+            test!(builtin_not(&[val(true)]), success(false)),
+            test!(builtin_not(&[val(false)]), success(true)),
             // Test not error cases
-            (builtin_not(&[]), None),                      // No args
-            (builtin_not(&[val(true), val(false)]), None), // Too many args
-            (builtin_not(&[val(1)]), None),                // Wrong type
-            (builtin_not(&[val("true")]), None),           // Wrong type
+            test!(builtin_not(&[]), None), // No args
+            test!(builtin_not(&[val(true), val(false)]), None), // Too many args
+            test!(builtin_not(&[val(1)]), None), // Wrong type
+            test!(builtin_not(&[val("true")]), None), // Wrong type
             // Test list functions - car
-            (builtin_car(&[val([1, 2, 3])]), Some(val(1))), // First element
-            (builtin_car(&[val(["only"])]), Some(val("only"))), // Single element
-            (builtin_car(&[val([val([1]), val(2)])]), Some(val([1]))), // Nested list
+            test!(builtin_car(&[val([1, 2, 3])]), success(1)), // First element
+            test!(builtin_car(&[val(["only"])]), success("only")), // Single element
+            test!(builtin_car(&[val([val([1]), val(2)])]), success([1])), // Nested list
             // Test car error cases
-            (builtin_car(&[]), None), // No args
-            (builtin_car(&[int_list.clone(), int_list.clone()]), None), // Too many args
-            (builtin_car(&[nil()]), None), // Empty list
-            (builtin_car(&[val(42)]), None), // Not a list
-            (builtin_car(&[val("not a list")]), None), // Not a list
+            test!(builtin_car(&[]), None), // No args
+            test!(builtin_car(&[int_list.clone(), int_list.clone()]), None), // Too many args
+            test!(builtin_car(&[nil()]), None), // Empty list
+            test!(builtin_car(&[val(42)]), None), // Not a list
+            test!(builtin_car(&[val("not a list")]), None), // Not a list
             // Test list functions - cdr
-            (builtin_cdr(&[val([1, 2, 3])]), Some(val([2, 3]))), // Rest of list
-            (builtin_cdr(&[val(["only"])]), Some(nil())),        // Single element -> empty
-            (builtin_cdr(&[val([1, 2])]), Some(val([2]))),       // Two elements
+            test!(builtin_cdr(&[val([1, 2, 3])]), success([2, 3])), // Rest of list
+            test!(builtin_cdr(&[val(["only"])]), Some(nil())),      // Single element -> empty
+            test!(builtin_cdr(&[val([1, 2])]), success([2])),       // Two elements
             // Test cdr error cases
-            (builtin_cdr(&[]), None), // No args
-            (builtin_cdr(&[int_list.clone(), int_list.clone()]), None), // Too many args
-            (builtin_cdr(&[nil()]), None), // Empty list
-            (builtin_cdr(&[val(true)]), None), // Not a list
+            test!(builtin_cdr(&[]), None), // No args
+            test!(builtin_cdr(&[int_list.clone(), int_list.clone()]), None), // Too many args
+            test!(builtin_cdr(&[nil()]), None), // Empty list
+            test!(builtin_cdr(&[val(true)]), None), // Not a list
             // Test list functions - cons
-            (builtin_cons(&[val(0), val([1, 2])]), Some(val([0, 1, 2]))), // Prepend to list
-            (builtin_cons(&[val("first"), nil()]), Some(val(["first"]))), // Cons to empty
-            (
+            test!(builtin_cons(&[val(0), val([1, 2])]), success([0, 1, 2])), // Prepend to list
+            test!(builtin_cons(&[val("first"), nil()]), success(["first"])), // Cons to empty
+            test!(
                 builtin_cons(&[val([1]), val([2])]),
-                Some(val([val([1]), val(2)])),
+                success([val([1]), val(2)])
             ), // Nested cons
             // Test cons error cases
-            (builtin_cons(&[]), None),                          // No args
-            (builtin_cons(&[val(1)]), None),                    // Too few args
-            (builtin_cons(&[val(1), val(2), val(3)]), None),    // Too many args
-            (builtin_cons(&[val(1), val(2)]), None),            // Second arg not a list
-            (builtin_cons(&[val(1), val("not a list")]), None), // Second arg not a list
+            test!(builtin_cons(&[]), None),       // No args
+            test!(builtin_cons(&[val(1)]), None), // Too few args
+            test!(builtin_cons(&[val(1), val(2), val(3)]), None), // Too many args
+            test!(builtin_cons(&[val(1), val(2)]), None), // Second arg not a list
+            test!(builtin_cons(&[val(1), val("not a list")]), None), // Second arg not a list
             // Test list functions - list
-            (builtin_list(&[]), Some(nil())),          // Empty list
-            (builtin_list(&[val(1)]), Some(val([1]))), // Single element
-            (
+            test!(builtin_list(&[]), Some(nil())), // Empty list
+            test!(builtin_list(&[val(1)]), success([1])), // Single element
+            test!(
                 builtin_list(&[val(1), val("hello"), val(true)]),
-                Some(val([val(1), val("hello"), val(true)])),
+                success([val(1), val("hello"), val(true)])
             ), // Mixed types
-            (
+            test!(
                 builtin_list(&[val([1]), val(2)]),
-                Some(val([val([1]), val(2)])),
+                success([val([1]), val(2)])
             ), // Nested lists
             // Test null? function
-            (builtin_null(&[nil()]), Some(val(true))), // Empty list is nil
-            (builtin_null(&[val(42)]), Some(val(false))), // Number is not nil
-            (builtin_null(&[val("")]), Some(val(false))), // Empty string is not nil
-            (builtin_null(&[val(false)]), Some(val(false))), // False is not nil
-            (builtin_null(&[val([1])]), Some(val(false))), // Non-empty list is not nil
+            test!(builtin_null(&[nil()]), success(true)), // Empty list is nil
+            test!(builtin_null(&[val(42)]), success(false)), // Number is not nil
+            test!(builtin_null(&[val("")]), success(false)), // Empty string is not nil
+            test!(builtin_null(&[val(false)]), success(false)), // False is not nil
+            test!(builtin_null(&[val([1])]), success(false)), // Non-empty list is not nil
             // Test null? error cases
-            (builtin_null(&[]), None),               // No args
-            (builtin_null(&[val(1), val(2)]), None), // Too many args
+            test!(builtin_null(&[]), None),               // No args
+            test!(builtin_null(&[val(1), val(2)]), None), // Too many args
             // Test error function
-            (builtin_error(&[]), None), // No args - should produce generic error
-            (builtin_error(&[val("test error")]), None), // String message
-            (builtin_error(&[val(42)]), None), // Number message
-            (builtin_error(&[val(true)]), None), // Bool message
-            (
+            test!(builtin_error(&[]), None), // No args - should produce generic error
+            test!(builtin_error(&[val("test error")]), None), // String message
+            test!(builtin_error(&[val(42)]), None), // Number message
+            test!(builtin_error(&[val(true)]), None), // Bool message
+            test!(
                 builtin_error(&[val("Error:"), val("Something went wrong")]),
-                None,
+                None
             ), // Multiple args
             // =================================================================
             // ARITHMETIC EDGE CASES
             // =================================================================
 
             // Integer overflow cases (should fail)
-            (builtin_add(&[val(i64::MAX), val(1)]), None), // Addition overflow
-            (builtin_mul(&[val(i64::MAX), val(2)]), None), // Multiplication overflow
-            (builtin_sub(&[val(i64::MIN)]), None),         // Negation overflow
-            (builtin_sub(&[val(i64::MIN), val(1)]), None), // Subtraction overflow
+            test!(builtin_add(&[val(i64::MAX), val(1)]), None), // Addition overflow
+            test!(builtin_mul(&[val(i64::MAX), val(2)]), None), // Multiplication overflow
+            test!(builtin_sub(&[val(i64::MIN)]), None),         // Negation overflow
+            test!(builtin_sub(&[val(i64::MIN), val(1)]), None), // Subtraction overflow
             // Boundary values (should succeed)
-            (builtin_add(&[val(i64::MAX), val(0)]), Some(val(i64::MAX))),
-            (builtin_sub(&[val(i64::MIN), val(0)]), Some(val(i64::MIN))),
-            (builtin_mul(&[val(i64::MAX), val(1)]), Some(val(i64::MAX))),
-            (builtin_mul(&[val(0), val(i64::MAX)]), Some(val(0))),
+            test!(builtin_add(&[val(i64::MAX), val(0)]), success(i64::MAX)),
+            test!(builtin_sub(&[val(i64::MIN), val(0)]), success(i64::MIN)),
+            test!(builtin_mul(&[val(i64::MAX), val(1)]), success(i64::MAX)),
+            test!(builtin_mul(&[val(0), val(i64::MAX)]), success(0)),
             // Operations with zero
-            (builtin_add(&[val(0)]), Some(val(0))),
-            (builtin_sub(&[val(0)]), Some(val(0))),
-            (builtin_mul(&[val(0)]), Some(val(0))),
+            test!(builtin_add(&[val(0)]), success(0)),
+            test!(builtin_sub(&[val(0)]), success(0)),
+            test!(builtin_mul(&[val(0)]), success(0)),
             // Large chain operations
-            (builtin_add(&many_ones), Some(val(100))),
-            (builtin_mul(&many_ones), Some(val(1))),
+            test!(builtin_add(&many_ones), success(100)),
+            test!(builtin_mul(&many_ones), success(1)),
             // =================================================================
             // COMPARISON EDGE CASES
             // =================================================================
 
             // Boundary comparisons
-            (builtin_gt(&[val(i64::MAX), val(i64::MIN)]), Some(val(true))),
-            (builtin_lt(&[val(i64::MIN), val(i64::MAX)]), Some(val(true))),
-            (builtin_ge(&[val(i64::MAX), val(i64::MAX)]), Some(val(true))),
-            (builtin_le(&[val(i64::MIN), val(i64::MIN)]), Some(val(true))),
+            test!(builtin_gt(&[val(i64::MAX), val(i64::MIN)]), success(true)),
+            test!(builtin_lt(&[val(i64::MIN), val(i64::MAX)]), success(true)),
+            test!(builtin_ge(&[val(i64::MAX), val(i64::MAX)]), success(true)),
+            test!(builtin_le(&[val(i64::MIN), val(i64::MIN)]), success(true)),
             // Long chain comparisons
-            (
+            test!(
                 builtin_lt(&[val(-5), val(-2), val(0), val(3), val(10)]),
-                Some(val(true)),
+                success(true)
             ),
-            (
+            test!(
                 builtin_gt(&[val(10), val(5), val(0), val(-3), val(-8)]),
-                Some(val(true)),
+                success(true)
             ),
-            (builtin_lt(&[val(1), val(2), val(1)]), Some(val(false))), // 2 > 1 fails
+            test!(builtin_lt(&[val(1), val(2), val(1)]), success(false)), // 2 > 1 fails
             // Numeric equality with many values
-            (builtin_eq(&all_fives), Some(val(true))),
-            (builtin_eq(&mostly_fives), Some(val(false))),
+            test!(builtin_eq(&all_fives), success(true)),
+            test!(builtin_eq(&mostly_fives), success(false)),
             // =================================================================
             // LIST OPERATIONS EDGE CASES
             // =================================================================
 
             // Deeply nested lists
-            (builtin_car(&[nested]), Some(val([val([1])]))),
+            test!(builtin_car(&[nested]), success([val([1])])),
             // Mixed type lists operations
-            (builtin_car(&[mixed.clone()]), Some(val(1))),
-            (
-                builtin_cdr(&[mixed.clone()]),
-                Some(val([val("hello"), val(true), nil()])),
+            test!(builtin_car(std::slice::from_ref(&mixed)), success(1)),
+            test!(
+                builtin_cdr(std::slice::from_ref(&mixed)),
+                success([val("hello"), val(true), nil()])
             ),
             // Cons with various types
-            (
+            test!(
                 builtin_cons(&[val(true), val([val(1), val(2)])]),
-                Some(val([val(true), val(1), val(2)])),
+                success([val(true), val(1), val(2)])
             ),
             // List creation with many elements
-            (
+            test!(
                 builtin_list(&many_elements),
-                Some(val((0..50).map(|i| val(i)).collect::<Vec<_>>())),
+                success((0..50).map(val).collect::<Vec<_>>())
             ),
             // =================================================================
             // EQUALITY STRICT TYPING - OVERRIDE BASIC EQUAL TESTS
             // =================================================================
 
             // Type coercion rejection (these should fail)
-            (builtin_equal(&[val(1), val("1")]), None),
-            (builtin_equal(&[val(0), val(false)]), None),
-            (builtin_equal(&[val(true), val(1)]), None),
-            (builtin_equal(&[val(""), nil()]), None),
-            (builtin_equal(&[val(Vec::<Value>::new()), val(false)]), None),
+            test!(builtin_equal(&[val(1), val("1")]), None),
+            test!(builtin_equal(&[val(0), val(false)]), None),
+            test!(builtin_equal(&[val(true), val(1)]), None),
+            test!(builtin_equal(&[val(""), nil()]), None),
+            test!(builtin_equal(&[val(Vec::<Value>::new()), val(false)]), None),
             // Complex same-type structures
-            (
-                builtin_equal(&[complex1.clone(), complex2]),
-                Some(val(true)),
-            ),
-            (builtin_equal(&[complex1, complex3]), Some(val(false))),
+            test!(builtin_equal(&[complex1.clone(), complex2]), success(true)),
+            test!(builtin_equal(&[complex1, complex3]), success(false)),
             // =================================================================
             // LOGICAL OPERATIONS STRICT - ADDITIONAL ERROR CASES
             // =================================================================
 
             // Non-boolean inputs should fail
-            (builtin_not(&[val(0)]), None),
-            (builtin_not(&[val("")]), None),
-            (builtin_not(&[nil()]), None),
-            (builtin_not(&[val("false")]), None),
+            test!(builtin_not(&[val(0)]), None),
+            test!(builtin_not(&[val("")]), None),
+            test!(builtin_not(&[nil()]), None),
+            test!(builtin_not(&[val("false")]), None),
         ];
 
-        for (result, expected) in test_cases {
+        for (test_expr, result, expected) in test_cases {
             match (result, expected) {
                 (Ok(actual), Some(expected_val)) => {
-                    assert_eq!(actual, expected_val, "Failed for actual: {:?}", actual);
+                    assert_eq!(actual, expected_val, "Failed for test case: {}", test_expr);
                 }
                 (Err(_), None) => {} // Expected error
                 (actual, expected) => panic!(
-                    "Unexpected result: got {:?}, expected {:?}",
+                    "Unexpected result for test case: {}\nGot result: {:?}, Expected: {:?}",
+                    test_expr,
                     actual.is_ok(),
                     expected.is_some()
                 ),

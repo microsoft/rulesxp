@@ -1,6 +1,8 @@
 use crate::SchemeError;
 use crate::ast::Value;
-use crate::builtinops::{Arity, BuiltinOp, find_jsonlogic_op, find_scheme_op};
+use crate::builtinops::{
+    Arity, BuiltinOp, find_jsonlogic_op, find_scheme_op, get_list_op, get_quote_op,
+};
 use serde_json;
 
 /// Indicates the compilation context for JSON values
@@ -68,11 +70,10 @@ fn compile_json_to_ast_with_context(
                 }
                 _ => {
                     // Arrays always become list operations in JSONLogic
-                    let list_op =
-                        find_scheme_op("list").expect("list builtin operation must be available");
+                    let list_op = get_list_op();
                     Ok(Value::PrecompiledOp {
                         op: list_op,
-                        op_id: "list".to_string(),
+                        op_id: list_op.scheme_id.to_string(),
                         args: converted,
                     })
                 }
@@ -178,26 +179,24 @@ fn compile_jsonlogic_operation(
         }
 
         // Variable access (JSONLogic specific)
-        "var" => {
-            if let serde_json::Value::String(var_name) = operands {
-                Ok(Value::Symbol(var_name))
-            } else {
-                Err(SchemeError::ParseError("var requires string".to_string()))
-            }
-        }
+        "var" => match operands {
+            serde_json::Value::String(var_name) => Ok(Value::Symbol(var_name)),
+            _ => Err(SchemeError::ParseError("var requires string".to_string())),
+        },
 
         // Quote special form - CRITICAL: preserve quoted content as literal data
         "scheme-quote" => {
             // Quote must have exactly one operand and must NOT compile/evaluate it
-            let operand = if let serde_json::Value::Array(mut arr) = operands {
-                if arr.len() != 1 {
-                    return Err(SchemeError::ParseError(
-                        "quote requires one operand".to_string(),
-                    ));
+            let operand = match operands {
+                serde_json::Value::Array(mut arr) => {
+                    if arr.len() != 1 {
+                        return Err(SchemeError::ParseError(
+                            "quote requires one operand".to_string(),
+                        ));
+                    }
+                    arr.pop().unwrap()
                 }
-                arr.pop().unwrap()
-            } else {
-                operands // Single operand without array wrapper
+                single_operand => single_operand, // Single operand without array wrapper
             };
 
             // Convert the operand to literal data WITHOUT compilation/evaluation
@@ -206,11 +205,10 @@ fn compile_jsonlogic_operation(
 
             // Create a PrecompiledOp wrapper to preserve quote information for roundtrip
             // This allows us to distinguish quoted data from regular list data
-            let quote_op = find_jsonlogic_op("scheme-quote")
-                .expect("quote builtin operation must be available");
+            let quote_op = get_quote_op();
             Ok(Value::PrecompiledOp {
                 op: quote_op,
-                op_id: "quote".to_string(),
+                op_id: quote_op.scheme_id.to_string(),
                 args: vec![quoted_data],
             })
         }
@@ -689,13 +687,13 @@ mod tests {
                 (Ok(jsonlogic_ast), IdenticalWithEvalError(expected_scheme)) => {
                     test_ast_equivalence_and_roundtrip(jsonlogic, &jsonlogic_ast, expected_scheme);
                     // Verify that evaluation actually fails as expected
-                    match eval(&jsonlogic_ast, &mut create_global_env()) {
-                        Ok(result) => panic!(
+                    if let Ok(result) = eval(&jsonlogic_ast, &mut create_global_env()) {
+                        panic!(
                             "Expected evaluation to fail for {}, but got: {}",
                             jsonlogic, result
-                        ),
-                        Err(_) => {} // Expected failure
+                        )
                     }
+                    // Expected failure
                 }
                 (Ok(jsonlogic_ast), SemanticallyEquivalent(expected_scheme)) => {
                     let scheme_ast = parse_scheme(expected_scheme).unwrap();
