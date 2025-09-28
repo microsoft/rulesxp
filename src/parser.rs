@@ -271,20 +271,15 @@ pub fn parse(input: &str) -> Result<Value, SchemeError> {
 fn validate_arity_in_ast(value: &Value) -> Result<(), SchemeError> {
     match value {
         Value::PrecompiledOp { op, args, .. } => {
-            // Validate this operation's arity with enhanced error message
-            if op.validate_arity(args.len()).is_err() {
-                // Get the failing expression in readable form
-                let failing_expr = value.to_uncompiled_form();
-
-                // Enhanced error message with expression context
-                let base_error = op.validate_arity(args.len()).unwrap_err();
-                if let SchemeError::ArityError { expected, got, .. } = base_error {
-                    return Err(SchemeError::arity_error_with_expr(
-                        expected,
-                        got,
-                        format!("{}", failing_expr),
-                    ));
-                }
+            // Validate this operation's arity
+            if let Err(SchemeError::ArityError { expected, got, .. }) =
+                op.validate_arity(args.len())
+            {
+                return Err(SchemeError::arity_error_with_expr(
+                    expected,
+                    got,
+                    format!("{}", value.to_uncompiled_form()),
+                ));
             }
             // Recursively validate nested expressions
             for arg in args {

@@ -3,13 +3,15 @@ use crate::ast::Value;
 use crate::builtinops::{Arity, BuiltinOp, find_jsonlogic_op, find_scheme_op};
 use serde_json;
 
-/// Indicates whether a JSON value should be treated as literal data or an operation context
+/// Indicates the compilation context for JSON values
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LiteralContext {
-    /// The value is literal data and should use list constructors for arrays
-    Yes,
-    /// The value is in an operand/argument context and should not use list constructors
-    No,
+enum CompilationContext {
+    /// Normal JSONLogic compilation - objects become operations, arrays become lists
+    Normal,
+    /// Array element context - used for elements inside JSONLogic arrays (operations still allowed)
+    ArrayElement,
+    /// Quote context - everything becomes literal data, no operations compiled
+    Quote,
 }
 
 /// Parse JSONLogic expression into AST value for evaluation
@@ -22,12 +24,12 @@ pub fn parse_jsonlogic(input: &str) -> Result<Value, SchemeError> {
 
 /// Compile a serde_json::Value to AST value
 fn compile_json_to_ast(json: serde_json::Value) -> Result<Value, SchemeError> {
-    compile_json_to_ast_with_context(json, LiteralContext::Yes)
+    compile_json_to_ast_with_context(json, CompilationContext::Normal)
 }
 
 fn compile_json_to_ast_with_context(
     json: serde_json::Value,
-    context: LiteralContext,
+    context: CompilationContext,
 ) -> Result<Value, SchemeError> {
     match json {
         // Primitives
@@ -47,23 +49,33 @@ fn compile_json_to_ast_with_context(
         }
         serde_json::Value::String(s) => Ok(Value::String(s)),
         serde_json::Value::Array(arr) => {
+            // Determine context for array elements
+            let element_context = match context {
+                CompilationContext::Quote => CompilationContext::Quote, // Quote context propagates
+                _ => CompilationContext::ArrayElement, // Normal/ArrayElement becomes ArrayElement
+            };
+
             let converted: Vec<Value> = arr
                 .into_iter()
-                .map(|v| compile_json_to_ast_with_context(v, LiteralContext::Yes))
+                .map(|v| compile_json_to_ast_with_context(v, element_context))
                 .collect::<Result<Vec<_>, _>>()?;
-            if context == LiteralContext::Yes {
-                // Use list constructor to create data structure without preventing evaluation
-                // This makes ["a", "b"] become (list "a" "b") which is data, not a function call
-                let list_op =
-                    find_scheme_op("list").expect("list builtin operation must be available");
-                Ok(Value::PrecompiledOp {
-                    op: list_op,
-                    op_id: "list".to_string(),
-                    args: converted,
-                })
-            } else {
-                // This is an operand list - return as plain list
-                Ok(Value::List(converted))
+
+            match context {
+                CompilationContext::Quote => {
+                    // In quote context, arrays become literal list data without "list" symbol
+                    // This matches the Scheme representation: (quote ("+" 1 2)) -> just the list elements
+                    Ok(Value::List(converted))
+                }
+                _ => {
+                    // Arrays always become list operations in JSONLogic
+                    let list_op =
+                        find_scheme_op("list").expect("list builtin operation must be available");
+                    Ok(Value::PrecompiledOp {
+                        op: list_op,
+                        op_id: "list".to_string(),
+                        args: converted,
+                    })
+                }
             }
         }
         serde_json::Value::Object(obj) => {
@@ -74,7 +86,34 @@ fn compile_json_to_ast_with_context(
             }
 
             let (operator, operands) = obj.into_iter().next().unwrap();
-            compile_jsonlogic_operation(&operator, operands)
+
+            match context {
+                CompilationContext::Quote => {
+                    // In quote context, only {"var": "symbol"} objects are allowed
+                    // All other objects (operations) are forbidden to ensure canonical list representation
+                    if operator == "var" {
+                        // {"var": "symbol"} becomes a symbol in quote context
+                        match operands {
+                            serde_json::Value::String(var_name) if !var_name.is_empty() => {
+                                Ok(Value::Symbol(var_name))
+                            }
+                            _ => Err(SchemeError::ParseError(
+                                "Variable must be nonempty string".to_string(),
+                            )),
+                        }
+                    } else {
+                        // Reject all other object form operations in quote context
+                        Err(SchemeError::ParseError(format!(
+                            "Object form operations like '{{\"{}\":...}}' are not allowed in quote context. Use list form like '[\"{}\", ...]' instead",
+                            operator, operator
+                        )))
+                    }
+                }
+                CompilationContext::Normal | CompilationContext::ArrayElement => {
+                    // Normal compilation context - compile as operation
+                    compile_jsonlogic_operation(&operator, operands)
+                }
+            }
         }
     }
 }
@@ -94,9 +133,9 @@ fn compile_jsonlogic_operation(
                 arr.into_iter()
                     .map(|v| {
                         let context = if matches!(v, serde_json::Value::Array(_)) {
-                            LiteralContext::Yes
+                            CompilationContext::ArrayElement
                         } else {
-                            LiteralContext::No
+                            CompilationContext::Normal
                         };
                         compile_json_to_ast_with_context(v, context)
                     })
@@ -105,9 +144,9 @@ fn compile_jsonlogic_operation(
             // Single operand - use list constructor if it's an array (data), don't modify scalars
             single => {
                 let context = if matches!(single, serde_json::Value::Array(_)) {
-                    LiteralContext::Yes
+                    CompilationContext::ArrayElement
                 } else {
-                    LiteralContext::No
+                    CompilationContext::Normal
                 };
                 Ok(vec![compile_json_to_ast_with_context(single, context)?])
             }
@@ -140,14 +179,40 @@ fn compile_jsonlogic_operation(
 
         // Variable access (JSONLogic specific)
         "var" => {
-            // For now, convert {"var": "field"} to just the symbol 'field'
-            // This will need data context support in the evaluator later
-            match operands {
-                serde_json::Value::String(var_name) => Ok(Value::Symbol(var_name)),
-                _ => Err(SchemeError::ParseError(
-                    "var operator requires string operand".to_string(),
-                )),
+            if let serde_json::Value::String(var_name) = operands {
+                Ok(Value::Symbol(var_name))
+            } else {
+                Err(SchemeError::ParseError("var requires string".to_string()))
             }
+        }
+
+        // Quote special form - CRITICAL: preserve quoted content as literal data
+        "scheme-quote" => {
+            // Quote must have exactly one operand and must NOT compile/evaluate it
+            let operand = if let serde_json::Value::Array(mut arr) = operands {
+                if arr.len() != 1 {
+                    return Err(SchemeError::ParseError(
+                        "quote requires one operand".to_string(),
+                    ));
+                }
+                arr.pop().unwrap()
+            } else {
+                operands // Single operand without array wrapper
+            };
+
+            // Convert the operand to literal data WITHOUT compilation/evaluation
+            // This preserves the quoted content as pure data
+            let quoted_data = compile_json_to_ast_with_context(operand, CompilationContext::Quote)?;
+
+            // Create a PrecompiledOp wrapper to preserve quote information for roundtrip
+            // This allows us to distinguish quoted data from regular list data
+            let quote_op = find_jsonlogic_op("scheme-quote")
+                .expect("quote builtin operation must be available");
+            Ok(Value::PrecompiledOp {
+                op: quote_op,
+                op_id: "quote".to_string(),
+                args: vec![quoted_data],
+            })
         }
 
         // For all other operations, look them up in the registry
@@ -189,77 +254,82 @@ pub fn ast_to_jsonlogic(value: &Value) -> Result<String, SchemeError> {
 
 /// Convert an AST value to serde_json::Value for JSONLogic output
 fn ast_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> {
+    ast_to_json_value_with_context(value, false)
+}
+
+/// Convert an AST value to serde_json::Value with optional quote context
+fn ast_to_json_value_with_context(
+    value: &Value,
+    in_quote_context: bool,
+) -> Result<serde_json::Value, SchemeError> {
     match value {
         Value::Number(n) => Ok(serde_json::Value::Number(serde_json::Number::from(*n))),
         Value::String(s) => Ok(serde_json::Value::String(s.clone())),
         Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
-        Value::Symbol(s) => {
-            // Convert symbols back to {"var": "symbol"} format
-            Ok(serde_json::json!({"var": s}))
-        }
-        Value::List(list) if list.is_empty() => {
-            // Empty list could be represented as empty array
-            Ok(serde_json::Value::Array(vec![]))
-        }
+        Value::Symbol(s) => Ok(serde_json::json!({"var": s})),
+        Value::List(list) if list.is_empty() => Ok(serde_json::Value::Array(vec![])),
         Value::List(list) => {
-            // Check if this is a list constructor call (array literal)
-            if let Some(Value::Symbol(op)) = list.first() {
-                if op == "list" {
-                    // This is (list arg1 arg2 ...) - convert back to JSON array
-                    let converted: Result<Vec<serde_json::Value>, SchemeError> =
-                        list[1..].iter().map(ast_to_json_value).collect();
-                    return Ok(serde_json::Value::Array(converted?));
-                }
-            }
-
-            // Check if this is a function call (first element is a symbol)
-            if let Some(Value::Symbol(op)) = list.first() {
+            if in_quote_context {
+                // In quote context, lists always become arrays
+                let converted: Result<Vec<serde_json::Value>, SchemeError> = list
+                    .iter()
+                    .map(|v| ast_to_json_value_with_context(v, true))
+                    .collect();
+                Ok(serde_json::Value::Array(converted?))
+            } else if let Some(Value::Symbol(op)) = list.first() {
                 let args: Result<Vec<serde_json::Value>, SchemeError> =
                     list[1..].iter().map(ast_to_json_value).collect();
                 let args = args?;
 
-                // Convert Scheme operator names back to JSONLogic operators
-                let jsonlogic_op = find_scheme_op(op)
-                    .map(|builtin_op| builtin_op.jsonlogic_id)
-                    .unwrap_or(op);
-
-                // Always use array format for all operations (including zero arguments)
-                Ok(serde_json::json!({jsonlogic_op: args}))
+                if op == "list" {
+                    Ok(serde_json::Value::Array(args))
+                } else {
+                    let jsonlogic_op = find_scheme_op(op)
+                        .map(|builtin_op| builtin_op.jsonlogic_id)
+                        .unwrap_or(op);
+                    Ok(serde_json::json!({jsonlogic_op: args}))
+                }
             } else {
-                // Convert list elements
                 let converted: Result<Vec<serde_json::Value>, SchemeError> =
                     list.iter().map(ast_to_json_value).collect();
                 Ok(serde_json::Value::Array(converted?))
             }
         }
         Value::BuiltinFunction { .. } => Err(SchemeError::EvalError(
-            "Cannot convert builtin function to JSONLogic".to_string(),
+            "Cannot convert builtin function".to_string(),
         )),
         Value::PrecompiledOp { op, args, .. } => {
-            // Special case: list constructor operations should convert back to JSONLogic arrays
+            if in_quote_context {
+                return Err(SchemeError::EvalError(
+                    "PrecompiledOp in quote context".to_string(),
+                ));
+            }
+
             if op.scheme_id == "list" {
-                // Convert the list arguments back to a JSON array
                 let converted: Result<Vec<serde_json::Value>, SchemeError> =
                     args.iter().map(ast_to_json_value).collect();
                 return Ok(serde_json::Value::Array(converted?));
             }
 
-            // Regular operations: convert Scheme operator names back to JSONLogic operators
-            let jsonlogic_op = op.jsonlogic_id;
+            if op.jsonlogic_id == "scheme-quote" {
+                if args.len() != 1 {
+                    return Err(SchemeError::EvalError(
+                        "Quote needs one argument".to_string(),
+                    ));
+                }
+                let quoted_content = ast_to_json_value_with_context(&args[0], true)?;
+                return Ok(serde_json::json!({"scheme-quote": [quoted_content]}));
+            }
 
-            // Convert arguments
             let converted_args: Result<Vec<serde_json::Value>, SchemeError> =
                 args.iter().map(ast_to_json_value).collect();
-            let args = converted_args?;
-
-            // Always use array format for all operations (including zero arguments)
-            Ok(serde_json::json!({jsonlogic_op: args}))
+            Ok(serde_json::json!({op.jsonlogic_id: converted_args?}))
         }
         Value::Function { .. } => Err(SchemeError::EvalError(
-            "Cannot convert user function to JSONLogic".to_string(),
+            "Cannot convert user function".to_string(),
         )),
         Value::Unspecified => Err(SchemeError::EvalError(
-            "Cannot convert unspecified value to JSONLogic".to_string(),
+            "Cannot convert unspecified value".to_string(),
         )),
     }
 }
@@ -278,6 +348,7 @@ mod tests {
         IdenticalWithEvalError(&'static str), // Parsing succeeds, test AST equivalence, but evaluation must fail
         SemanticallyEquivalent(&'static str),
         Error,
+        SpecificError(&'static str), // Parsing should fail with an error message containing this string
     }
     use TestResult::*;
 
@@ -346,12 +417,43 @@ mod tests {
                 IdenticalWithEvalError("(unknown_zero_args)"),
             ),
             // Error cases
-            ("null", Error),                     // Null values should be rejected
-            (r#"{"!=": [1]}"#, Error),           // Not equal with wrong arity should fail
-            (r#"{"!=": [1, 2, 3]}"#, Error),     // Not equal with too many args should fail
-            (r#"{"if": [true, "yes"]}"#, Error), // If with wrong arity should fail
-            ("invalid json", Error),             // Invalid JSON should fail
+            ("null", Error), // Null values should be rejected
+            (r#"{"!=": [1]}"#, SpecificError("ArityError")), // Not equal with wrong arity should fail
+            (r#"{"!=": [1, 2, 3]}"#, SpecificError("ArityError")), // Not equal with too many args should fail
+            (r#"{"if": [true, "yes"]}"#, SpecificError("ArityError")), // If with wrong arity should fail
+            ("invalid json", Error),                                   // Invalid JSON should fail
             (r#"{"and": true, "or": false}"#, Error), // Multiple keys in object should fail
+            // Quote context error cases - object form operations should be rejected
+            (
+                r#"{"scheme-quote": [{"+": [1, 2]}]}"#,
+                SpecificError("Object form operations"),
+            ),
+            (
+                r#"{"scheme-quote": [{"if": [true, "yes", "no"]}]}"#,
+                SpecificError("not allowed in quote context"),
+            ),
+            (
+                r#"{"scheme-quote": [{"not": true}]}"#,
+                SpecificError("Object form operations"),
+            ),
+            (
+                r#"{"scheme-quote": [{"and": [true, false]}]}"#,
+                SpecificError("not allowed in quote context"),
+            ),
+            (
+                r#"{"scheme-quote": [{"car": [1, 2, 3]}]}"#,
+                SpecificError("Object form operations"),
+            ),
+            // Nested object form operations should also be rejected
+            (
+                r#"{"scheme-quote": [["list", {"+": [1, 2]}]]}"#,
+                SpecificError("Object form operations"),
+            ),
+            // Empty string variable names should be rejected
+            (
+                r#"{"scheme-quote": [{"var": ""}]}"#,
+                SpecificError("nonempty string"),
+            ),
             // Design validation tests - operations intentionally rejected/different
             (
                 r#"{"unknown_not": [true]}"#,
@@ -475,23 +577,67 @@ mod tests {
                 r#"[{"op": [1]}, {"op2": [2]}]"#,
                 IdenticalWithEvalError("(list (op 1) (op2 2))"),
             ),
-            // Security-critical cases: Arrays with dangerous operation names stay as safe data
-            (
-                r#"["set!", "x", 123]"#,
-                Identical(r#"(list "set!" "x" 123)"#),
-            ), // Would modify variable if not using list constructor
+            // Arrays in JSON are not function calls in Scheme - they become list constructor calls
             (
                 r#"["eval", "(+ 1 2)"]"#,
                 Identical(r#"(list "eval" "(+ 1 2)")"#),
-            ), // Would eval code if not using list constructor
-            (
-                r#"["system", "rm -rf /"]"#,
-                Identical(r#"(list "system" "rm -rf /")"#),
-            ), // Would execute system command if not using list constructor
+            ),
             (
                 r#"["load", "dangerous-file.scm"]"#,
                 Identical(r#"(list "load" "dangerous-file.scm")"#),
-            ), // Would load file if not using list constructor
+            ),
+            // ===== QUOTE OPERATION TESTS (CRITICAL FOR EVALUATION CONTROL) =====
+            // Quote should preserve content as literal data without PrecompiledOps/Functions
+            (
+                r#"{"scheme-quote": ["hello"]}"#,
+                Identical(r#"(quote "hello")"#),
+            ),
+            (r#"{"scheme-quote": [42]}"#, Identical("(quote 42)")),
+            (r#"{"scheme-quote": [true]}"#, Identical("(quote #t)")),
+            (
+                r#"{"scheme-quote": [[1, 2, 3]]}"#,
+                Identical("(quote (1 2 3))"),
+            ),
+            // Quote should prevent evaluation of operations (using list form only)
+            (
+                r#"{"scheme-quote": [["+", 1, 2]]}"#,
+                Identical("(quote (\"+\" 1 2))"),
+            ),
+            (
+                r#"{"scheme-quote": [["not", true]]}"#,
+                Identical("(quote (\"not\" #t))"),
+            ),
+            (
+                r#"{"scheme-quote": [["if", true, "yes", "no"]]}"#,
+                Identical(r#"(quote ("if" #t "yes" "no"))"#),
+            ),
+            // Quote with nested operations (should all become data)
+            (
+                r#"{"scheme-quote": [["car", ["list", 1, 2, 3]]]}"#,
+                Identical(r#"(quote ("car" ("list" 1 2 3)))"#),
+            ),
+            // Quote with arrays containing operations
+            (
+                r#"{"scheme-quote": [[["+", 1, 2], ["-", 3, 1]]]}"#,
+                Identical(r#"(quote (("+" 1 2) ("-" 3 1)))"#),
+            ),
+            // Quote preserves symbol structure ({"var": "x"} is allowed in quotes)
+            (
+                r#"{"scheme-quote": [{"var": "x"}]}"#,
+                Identical("(quote x)"),
+            ),
+            (
+                r#"{"scheme-quote": [["and", true, false]]}"#,
+                Identical(r#"(quote ("and" #t #f))"#),
+            ),
+            (
+                r#"{"scheme-quote": [[{"var": "func"}, 1, 2]]}"#,
+                Identical(r#"(quote (func 1 2))"#),
+            ),
+            (
+                r#"{"scheme-quote": [["list", {"var": "symbol"}, 1, 2]]}"#,
+                Identical(r#"(quote ("list" symbol 1 2))"#),
+            ), // List with symbol in quote context
             // Complex nested lambda-like structures
             (
                 r#"["lambda", ["x"], ["*", "x", "x"]]"#,
@@ -569,8 +715,24 @@ mod tests {
                         assert_eq!(jsonlogic_val, roundtrip_result);
                     }
                 }
+
                 (Err(_), Error) => {
                     // Expected error
+                }
+                (Err(e), SpecificError(expected_error_text)) => {
+                    let error_msg = format!("{:?}", e);
+                    assert!(
+                        error_msg.contains(expected_error_text),
+                        "Error message should contain '{}', but got: {}",
+                        expected_error_text,
+                        error_msg
+                    );
+                }
+                (Ok(_), SpecificError(expected_error_text)) => {
+                    panic!(
+                        "Expected error containing '{}' for JSONLogic '{}', but parsing succeeded",
+                        expected_error_text, jsonlogic
+                    );
                 }
                 (_, _) => {
                     panic!(
