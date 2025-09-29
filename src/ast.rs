@@ -140,7 +140,20 @@ impl std::fmt::Display for Value {
         match self {
             Value::Number(n) => write!(f, "{}", n),
             Value::Symbol(s) => write!(f, "{}", s),
-            Value::String(s) => write!(f, "\"{}\"", s),
+            Value::String(s) => {
+                write!(f, "\"")?;
+                for ch in s.chars() {
+                    match ch {
+                        '"' => write!(f, "\\\"")?,
+                        '\\' => write!(f, "\\\\")?,
+                        '\n' => write!(f, "\\n")?,
+                        '\t' => write!(f, "\\t")?,
+                        '\r' => write!(f, "\\r")?,
+                        c => write!(f, "{}", c)?,
+                    }
+                }
+                write!(f, "\"")
+            }
             Value::Bool(b) => write!(f, "{}", if *b { "#t" } else { "#f" }),
             Value::List(elements) => {
                 write!(f, "(")?;
@@ -320,5 +333,14 @@ mod helper_function_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_unspecified_values() {
+        // Unspecified never equals anything, including itself
+        let unspec = Value::Unspecified;
+        assert_ne!(unspec, unspec);
+        assert_ne!(unspec, Value::Unspecified);
+        assert_ne!(unspec, val(42));
     }
 }

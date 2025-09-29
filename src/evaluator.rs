@@ -370,12 +370,6 @@ mod tests {
     use crate::ast::{nil, sym, val};
     use crate::parser::parse;
 
-    fn eval_string(input: &str) -> Result<Value, SchemeError> {
-        let expr = parse(input)?;
-        let mut env = create_global_env();
-        eval(&expr, &mut env)
-    }
-
     /// Test result variants for comprehensive testing
     #[derive(Debug)]
     enum TestResult {
@@ -418,7 +412,10 @@ mod tests {
         let expr = match parse(input) {
             Ok(expr) => expr,
             Err(parse_err) => {
-                panic!("{}: unexpected parse error for '{}': {:?}", test_id, input, parse_err);
+                panic!(
+                    "{}: unexpected parse error for '{}': {:?}",
+                    test_id, input, parse_err
+                );
             }
         };
 
@@ -429,10 +426,7 @@ mod tests {
                     (Value::Unspecified, Value::Unspecified) => {} // Both unspecified - OK
                     _ => {
                         if actual != *expected_val {
-                            panic!(
-                                "{}: expected {:?}, got {:?}",
-                                test_id, expected_val, actual
-                            );
+                            panic!("{}: expected {:?}, got {:?}", test_id, expected_val, actual);
                         }
                     }
                 }
@@ -440,7 +434,7 @@ mod tests {
 
             (Err(_), Error) => {} // Expected generic error
             (Err(e), SpecificError(expected_text)) => {
-                let error_msg = format!("{:?}", e);
+                let error_msg = format!("{}", e);
                 if !error_msg.contains(expected_text) {
                     panic!(
                         "{}: error should contain '{}', got: {}",
@@ -575,6 +569,12 @@ mod tests {
             // Nested quotes
             ("'(quote x)", success([sym("quote"), sym("x")])),
             ("''x", success([sym("quote"), sym("x")])),
+            // === DYNAMIC FUNCTION CALLS IN OPERATOR POSITION ===
+            // Test that expressions in operator position are evaluated correctly
+            ("((if #t + *) 2 3)", success(5)), // + was chosen, 2 + 3 = 5
+            ("((if #f + *) 2 3)", success(6)), // * was chosen, 2 * 3 = 6
+            // Test lambda in operator position
+            ("((lambda (x) (* x x)) 4)", success(16)), // 4 * 4 = 16
             // === LIST OPERATIONS ===
             // Basic list access
             ("(car (list 1 2 3))", success(1)),
@@ -587,6 +587,21 @@ mod tests {
             ("(list)", success(nil())),
             ("(list 1)", success([1])),
             ("(list 1 2 3 4)", success([1, 2, 3, 4])),
+            // === NIL REPRESENTATION AND OPERATIONS ===
+            // Test strict evaluation semantics: () is NOT self-evaluating
+            // This is a very common Scheme extension, but we're trying to be minimalist to the spec
+            ("()", Error), // Empty list cannot be evaluated.
+            // null? predicate tests
+            ("(null? '())", success(true)),
+            ("(null? (list))", success(true)),
+            ("(null? (quote ()))", success(true)),
+            ("(null? 42)", success(false)),
+            ("(null? #f)", success(false)),
+            // cons with nil (additional cases beyond basic list construction)
+            ("(cons 1 '())", success([1])),
+            ("(cons 'a (cons 'b '()))", success([sym("a"), sym("b")])),
+            // Lambda with empty parameter list
+            ("((lambda () 42))", success(42)),
             // === CONDITIONAL OPERATIONS ===
             // Basic if expressions
             ("(if #t 1 2)", success(1)),
@@ -602,6 +617,8 @@ mod tests {
             ("(if 42 1 2)", Error),
             ("(if () 1 2)", Error),
             ("(if \"hello\" 1 2)", Error),
+            ("(if '() 1 2)", Error), // nil as condition should error
+            ("(if #f 42 '())", success(nil())), // if returning nil is valid
             // Note: Arity errors are now caught at parse time - see parser.rs tests
             // === BOOLEAN LOGIC OPERATIONS ===
             // and operator - SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
@@ -654,182 +671,98 @@ mod tests {
             // null? function works with quoted empty lists
             ("(null? '())", success(true)),
             ("(null? (list 1))", success(false)),
-        ];
-
-        run_comprehensive_tests(test_cases);
-    }
-
-    #[test]
-    fn test_define_and_lookup() {
-        let test_environments = vec![TestEnvironment(vec![
-            test_setup!("(define x 42)"), // Define variable
-            ("x", success(42)),           // Should be able to lookup defined variable
-            ("y", Error),                 // Undefined variable should error
-        ])];
-
-        run_tests_in_environment(test_environments);
-    }
-
-    #[test]
-    fn test_define_returns_unspecified() {
-        let test_cases = vec![
-            // Define statements should return Unspecified
-            test_setup!("(define x 42)"),
-            test_setup!("(define flag #t)"),
-            test_setup!("(define name \"hello\")"),
-            test_setup!("(define func +)"),
-            test_setup!("(define lambda-var (lambda (x) x))"),
-        ];
-
-        run_comprehensive_tests(test_cases);
-
-        // Test that Unspecified has special equality semantics (doesn't equal itself)
-        let mut env = create_global_env();
-        let define_expr = parse("(define x 42)").unwrap();
-        let result = eval(&define_expr, &mut env).unwrap();
-
-        // Unspecified should not equal itself or any other value
-        assert_ne!(result, result);
-        assert_ne!(result, Value::Unspecified);
-        assert_ne!(result, crate::ast::unspecified());
-        assert_ne!(result, val(42));
-        assert_ne!(result, val(true));
-    }
-
-    #[test]
-    fn test_error_function() {
-        let test_cases = vec![
+            // === ERROR FUNCTION OPERATIONS ===
             // Test error with string message
-            ("(error \"Something went wrong\")", SpecificError("Something went wrong")),
+            (
+                "(error \"Something went wrong\")",
+                SpecificError("Something went wrong"),
+            ),
             // Test error with symbol message
             ("(error oops)", SpecificError("oops")),
             // Test error with number message
             ("(error 42)", SpecificError("42")),
             // Test error with multiple arguments
-            ("(error \"Error:\" 42 \"occurred\")", SpecificError("Error: 42 occurred")),
+            (
+                "(error \"Error:\" 42 \"occurred\")",
+                SpecificError("Error: 42 occurred"),
+            ),
             // Test error with no arguments
             ("(error)", SpecificError("Error")),
+            // === ERROR PROPAGATION AND HANDLING ===
+            // Test undefined variable errors
+            ("undefined-var", Error),
+            // Test type errors propagate through calls
+            ("(not 42)", SpecificError("boolean argument")), // Type error with specific message
+            ("(car \"not-a-list\")", Error),                 // Type error
+            // Test errors in nested expressions
+            ("(+ 1 (car \"not-a-list\"))", Error),
+            ("(if (not 42) 1 2)", Error),
+            // Test lambda parameter errors
+            ("(lambda (x x) x)", Error),           // Duplicate params
+            ("(lambda \"not-a-list\" 42)", Error), // Invalid params
+            // Test define errors
+            ("(define 123 42)", Error),            // Invalid var name
+            ("(define \"not-symbol\" 42)", Error), // Invalid var name
+            // === ERROR CASES ===
+            // Unbound variables
+            (
+                "undefined-var",
+                SpecificError("Unbound variable: undefined-var"),
+            ),
+            ("(set! x 42)", SpecificError("Unbound variable: set!")), // Unsupported special forms appear as unbound variables
+            // Type errors
+            (
+                "(+ 1 \"hello\")",
+                SpecificError("Type error: + requires numbers"),
+            ),
         ];
 
         run_comprehensive_tests(test_cases);
-    }
 
-    /// Comprehensive tests to ensure all evaluation paths work correctly
-    /// and that PrecompiledOps never escape as first-class values
-    mod evaluation_paths {
-        use super::*;
-
-        #[test]
-        fn test_precompiled_ops_are_consumed_not_produced() {
-            // PrecompiledOps should be created during parsing and consumed during evaluation
-            // They should never be returned as values from evaluation
-
-            // Test that builtin operations are PrecompiledOps during parsing but return concrete values
-            let expr = parse("(+ 1 2)").unwrap();
-            match &expr {
-                Value::PrecompiledOp { .. } => {} // Good - parsed as PrecompiledOp
-                _ => panic!("Expected PrecompiledOp from parsing"),
-            }
-
-            // Test that evaluation returns concrete values, never PrecompiledOp
-            let test_cases = vec![
-                ("(+ 1 2)", success(3)),      // Should return Number(3), not PrecompiledOp
-                ("(* 2 3)", success(6)),      // Should return Number(6), not PrecompiledOp
-                ("(quote foo)", success(sym("foo"))), // Special forms also return concrete values
-            ];
-
-            run_comprehensive_tests(test_cases);
-        }
-
-        #[test]
-        fn test_special_forms_via_precompiled_ops() {
-            // Special forms should work through PrecompiledOps in main eval()
-            let test_cases = vec![
-                ("(quote foo)", success(sym("foo"))),
-                ("(if #t 1 2)", success(1)),
-                ("(and #t #t)", success(true)),
-                ("(or #f #t)", success(true)),
-            ];
-
-            run_comprehensive_tests(test_cases);
-        }
-
-        #[test]
-        fn test_builtin_functions_via_precompiled_ops() {
-            // Builtin functions should work through PrecompiledOps (fast path)
-            let test_cases = vec![
-                ("(+ 1 2 3)", success(6)),
-                ("(* 2 3 4)", success(24)),
-                ("(equal? 5 5)", success(true)),
-                ("(not #f)", success(true)),
-            ];
-
-            run_comprehensive_tests(test_cases);
-        }
-
-        #[test]
-        fn test_builtin_functions_via_dynamic_symbol_lookup() {
-            // Builtin functions should also work when called dynamically through symbols
-            // This exercises the eval_list -> symbol lookup -> BuiltinFunction path
-            let test_environments = vec![TestEnvironment(vec![
+        // === ENVIRONMENT-SENSITIVE TESTS ===
+        // Tests that require shared state between expressions in the same environment
+        let environment_test_cases = vec![
+            // === DEFINE AND LOOKUP ===
+            // Basic variable definition and lookup
+            TestEnvironment(vec![
+                test_setup!("(define x 42)"), // Define variable
+                ("x", success(42)),           // Should be able to lookup defined variable
+                ("y", Error),                 // Undefined variable should error
+            ]),
+            // === DEFINE AND VARIABLES ===
+            // Variable redefinition and usage in expressions
+            TestEnvironment(vec![
+                // Define a variable
+                test_setup!("(define x 42)"),
+                ("x", success(42)),
+                // Use variable in expressions
+                ("(+ x 8)", success(50)),
+                // Redefine variable
+                test_setup!("(define x 100)"),
+                ("x", success(100)),
+            ]),
+            // === BUILTIN FUNCTIONS VIA DYNAMIC SYMBOL LOOKUP ===
+            // Builtin functions called dynamically through symbols
+            TestEnvironment(vec![
                 // Store a reference to + in a variable, then call it
                 test_setup!("(define my-add +)"),
                 ("(my-add 10 20)", success(30)),
                 // Store reference to equal? and call it
                 test_setup!("(define my-eq equal?)"),
                 ("(my-eq 5 5)", success(true)),
-            ])];
-
-            run_tests_in_environment(test_environments);
-        }
-
-        #[test]
-        fn test_lambda_functions_via_eval_list() {
-            // User-defined lambda functions should work through eval_list
-            let test_environments = vec![
-                // Test immediate lambda call
-                TestEnvironment(vec![
-                    ("((lambda (x y) (+ x y)) 3 4)", success(7)),
-                ]),
-                // Test lambda definition and call
-                TestEnvironment(vec![
-                    test_setup!("(define add-one (lambda (x) (+ x 1)))"),
-                    ("(add-one 42)", success(43)),
-                ]),
-            ];
-
-            run_tests_in_environment(test_environments);
-        }
-
-        #[test]
-        fn test_quoted_expressions_preserve_structure() {
-            // quote should return the unoptimized structure, never PrecompiledOps
-            let result = eval_string("(quote (+ 1 2))").unwrap();
-            match result {
-                Value::List(elements) => {
-                    assert_eq!(elements.len(), 3);
-                    assert_eq!(elements[0], sym("+"));
-                    assert_eq!(elements[1], val(1));
-                    assert_eq!(elements[2], val(2));
-                    // Critically: this should NOT be a PrecompiledOp
-                    for elem in &elements {
-                        if let Value::PrecompiledOp { .. } = elem {
-                            panic!(
-                                "Found PrecompiledOp in quoted structure - should be impossible!"
-                            );
-                        }
-                    }
-                }
-                Value::PrecompiledOp { .. } => {
-                    panic!("quote returned PrecompiledOp - should be impossible!")
-                }
-                _ => panic!("Expected List from (quote (+ 1 2)), got {:?}", result),
-            }
-        }
-
-        #[test]
-        fn test_define_with_various_value_types() {
-            let test_environments = vec![TestEnvironment(vec![
+            ]),
+            // === LAMBDA FUNCTIONS VIA EVAL_LIST (Test 1) ===
+            // Test immediate lambda call
+            TestEnvironment(vec![("((lambda (x y) (+ x y)) 3 4)", success(7))]),
+            // === LAMBDA FUNCTIONS VIA EVAL_LIST (Test 2) ===
+            // Test lambda definition and call
+            TestEnvironment(vec![
+                test_setup!("(define add-one (lambda (x) (+ x 1)))"),
+                ("(add-one 42)", success(43)),
+            ]),
+            // === DEFINE WITH VARIOUS VALUE TYPES ===
+            // Test defining and retrieving different types
+            TestEnvironment(vec![
                 // Define numbers, booleans, strings
                 test_setup!("(define x 42)"),
                 test_setup!("(define flag #t)"),
@@ -840,41 +773,10 @@ mod tests {
                 ("name", success("test")),
                 // Define and retrieve builtin functions (test that it's a BuiltinFunction)
                 test_setup!("(define my-plus +)"),
-            ])];
-
-            run_tests_in_environment(test_environments);
-
-            // Additional test to verify the BuiltinFunction type (can't easily test with data-driven approach)
-            let mut env = create_global_env();
-            eval(&parse("(define my-plus +)").unwrap(), &mut env).unwrap();
-            let result = eval(&parse("my-plus").unwrap(), &mut env).unwrap();
-            match result {
-                Value::BuiltinFunction { .. } => {} // Good - should be BuiltinFunction
-                Value::PrecompiledOp { .. } => {
-                    panic!("define stored PrecompiledOp - should be impossible!")
-                }
-                _ => panic!("Expected BuiltinFunction, got {:?}", result),
-            }
-        }
-
-        #[test]
-        fn test_dynamic_function_calls_in_operator_position() {
-            let test_cases = vec![
-                // Test that expressions in operator position are evaluated correctly
-                // ((if #t + *) 2 3) should evaluate the if, get +, then apply it
-                ("((if #t + *) 2 3)", success(5)), // + was chosen, 2 + 3 = 5
-                ("((if #f + *) 2 3)", success(6)), // * was chosen, 2 * 3 = 6
-                // Test lambda in operator position
-                ("((lambda (x) (* x x)) 4)", success(16)), // 4 * 4 = 16
-            ];
-
-            run_comprehensive_tests(test_cases);
-        }
-
-        #[test]
-        fn test_nested_evaluation_paths() {
+            ]),
+            // === NESTED EVALUATION PATHS ===
             // Test deeply nested expressions that exercise multiple evaluation paths
-            let test_environments = vec![TestEnvironment(vec![
+            TestEnvironment(vec![
                 test_setup!("(define square (lambda (x) (* x x)))"), // Define helper function
                 // This expression exercises multiple evaluation paths:
                 // - if (special form via PrecompiledOp)
@@ -882,47 +784,18 @@ mod tests {
                 // - square (lambda via dynamic call)
                 // - + (builtin via PrecompiledOp)
                 ("(if (> 5 3) (square (+ 2 1)) 0)", success(9)), // (+ 2 1) = 3, square(3) = 9
-            ])];
-
-            run_tests_in_environment(test_environments);
-        }
-
-        #[test]
-        fn test_self_evaluating_forms() {
-            // Ensure PrecompiledOp is NOT self-evaluating (confirmed by its absence from the match)
-            let test_cases = vec![
-                ("42", success(42)),
-                ("#t", success(true)),
-                ("\"hello\"", success("hello")),
-            ];
-            run_comprehensive_tests(test_cases);
-
+            ]),
+            // === SELF EVALUATING FORMS ===
             // BuiltinFunction and Function are self-evaluating (test with environment)
-            let test_environments = vec![TestEnvironment(vec![
+            TestEnvironment(vec![
                 test_setup!("(define f +)"),
                 // Note: We can't easily test the type in data-driven approach,
                 // but we can verify it behaves correctly as a function
                 ("(f 2 3)", success(5)),
-            ])];
-
-            run_tests_in_environment(test_environments);
-
-            // Additional type check that can't be done data-driven
-            let mut env = create_global_env();
-            eval(&parse("(define f +)").unwrap(), &mut env).unwrap();
-            let result = eval(&parse("f").unwrap(), &mut env).unwrap();
-            match result {
-                Value::BuiltinFunction { .. } => {} // Self-evaluating
-                _ => panic!("Expected BuiltinFunction to be self-evaluating"),
-            }
-        }
-
-        #[test]
-        fn test_impossible_precompiled_op_in_eval_list() {
+            ]),
+            // === IMPOSSIBLE PRECOMPILED OP IN EVAL_LIST ===
             // This test documents that PrecompiledOp can never reach eval_list
-            // as a function value, justifying the removal of that match arm
-
-            let test_environments = vec![TestEnvironment(vec![
+            TestEnvironment(vec![
                 // Set up dynamic builtin reference and lambda function
                 test_setup!("(define add +)"),
                 test_setup!("(define sq (lambda (x) (* x x)))"),
@@ -938,62 +811,30 @@ mod tests {
                 // 5. Higher-order function combinations
                 ("((lambda (op a b) (op a b)) * 3 4)", success(12)), // op=*, a=3, b=4
                 ("((lambda (fn) (fn 7)) sq)", success(49)),          // fn=sq, so (sq 7) = 49
-            ])];
-
-            run_tests_in_environment(test_environments);
-
-            // The absence of PrecompiledOp match arm in eval_list is justified
-            // because PrecompiledOps are consumed by main eval(), never produced
-        }
-
-        #[test]
-        fn test_and_or_strict_boolean_validation() {
-            let test_cases = vec![
-                // Valid boolean operations
-                ("(and #t #t)", success(true)),
-                ("(and #f #t)", success(false)),
-                ("(or #f #f)", success(false)),
-                ("(or #t #f)", success(true)),
-                // Invalid: obvious non-booleans should fail
-                ("(and 1 #t)", SpecificError("boolean arguments")),
-                ("(and \"hello\" #t)", SpecificError("boolean arguments")),
-                ("(or #t 42)", SpecificError("boolean arguments")),
-                ("(or \"false\" #f)", SpecificError("boolean arguments")),
-                // Invalid: function calls that return non-booleans
-                ("(and (+ 1 2) #t)", SpecificError("boolean arguments")),
-                ("(or #f (car '(hello)))", SpecificError("boolean arguments")),
-                // Edge case: short-circuiting still validates all args first
-                ("(and #f 123)", SpecificError("boolean arguments")),
-                ("(or #t \"not-bool\")", SpecificError("boolean arguments")),
-            ];
-
-            run_comprehensive_tests(test_cases);
-        }
-
-        #[test]
-        fn test_if_special_form_strict() {
-            let test_cases = vec![
-                // Valid if expressions
-                ("(if #t 42 0)", success(42)),
-                ("(if #f 42 0)", success(0)),
-                ("(if (> 5 3) \"big\" \"small\")", success("big")),
-                // Invalid: non-boolean conditions
-                ("(if 1 42 0)", SpecificError("boolean")),
-                ("(if \"hello\" 42 0)", SpecificError("boolean")),
-                ("(if () 42 0)", Error),
-                // Valid: complex conditions that evaluate to booleans
-                ("(if (and #t #t) 42 0)", success(42)),
-                ("(if (not #f) 42 0)", success(42)),
-                // Note: Arity errors are now caught at parse time - see parser.rs tests
-            ];
-
-            run_comprehensive_tests(test_cases);
-        }
-
-        #[test]
-        fn test_lambda_and_define_edge_cases() {
-            let test_environments = vec![TestEnvironment(vec![
-                // Test lambda with various parameter patterns
+            ]),
+            // === HIGHER ORDER FUNCTIONS ===
+            // Define a function that takes another function as argument
+            TestEnvironment(vec![
+                test_setup!("(define twice (lambda (f x) (f (f x))))"),
+                test_setup!("(define inc (lambda (x) (+ x 1)))"),
+                ("(twice inc 5)", success(7)),
+            ]),
+            // === LEXICAL SCOPING ===
+            // Test that lambda captures its environment and parameter shadowing
+            TestEnvironment(vec![
+                // Test that lambda captures its environment
+                test_setup!("(define x 10)"),
+                test_setup!("(define make-adder (lambda (n) (lambda (x) (+ x n))))"),
+                test_setup!("(define add5 (make-adder 5))"),
+                ("(add5 3)", success(8)),
+                // Test parameter shadowing
+                test_setup!("(define f (lambda (x) (lambda (x) (* x 2))))"),
+                test_setup!("(define g (f 10))"),
+                ("(g 3)", success(6)),
+            ]),
+            // === LAMBDA AND DEFINE EDGE CASES ===
+            // Test lambda with various parameter patterns
+            TestEnvironment(vec![
                 test_setup!("(define id (lambda (x) x))"),
                 ("(id 42)", success(42)),
                 // Test lambda with multiple parameters
@@ -1011,7 +852,7 @@ mod tests {
                 test_setup!("(define add5 (make-adder 5))"),
                 ("(add5 3)", success(8)),
                 // Test lambda arity checking
-                ("(id)", Error), // Too few args
+                ("(id)", Error),     // Too few args
                 ("(id 1 2)", Error), // Too many args
                 // Test define with function values
                 test_setup!("(define plus +)"),
@@ -1021,121 +862,36 @@ mod tests {
                 ("y", success(100)),
                 test_setup!("(define y 200)"),
                 ("y", success(200)),
-            ])];
-
-            run_tests_in_environment(test_environments);
-        }
-
-        #[test]
-        fn test_quote_and_symbolic_data() {
-            let test_cases = vec![
-                // Core evaluation behavior: quote prevents evaluation
-                ("'(+ 1 2)", success([sym("+"), val(1), val(2)])), // Should NOT evaluate to 3
-                (
-                    "'(undefined-function 123)",
-                    success([sym("undefined-function"), val(123)]),
-                ), // Should NOT error
-                // Nested quotes - evaluation semantics
-                ("''x", success([sym("quote"), sym("x")])),
-                // Quote vs evaluate comparison - demonstrate quote prevents evaluation
-                ("(list 1 2 3)", success([1, 2, 3])), // Evaluates function call
-                (
-                    "'(list 1 2 3)",
-                    success([sym("list"), val(1), val(2), val(3)]),
-                ), // Preserves structure
-            ];
-
-            run_comprehensive_tests(test_cases);
-        }
-
-        #[test]
-        fn test_error_propagation_and_handling() {
-            let test_cases = vec![
-                // Test undefined variable errors
-                ("undefined-var", Error),
-                // Test type errors propagate through calls
-                ("(not 42)", SpecificError("boolean argument")), // Type error with specific message
-                ("(car \"not-a-list\")", Error),                 // Type error
-                // Test errors in nested expressions
-                ("(+ 1 (car \"not-a-list\"))", Error),
-                ("(if (not 42) 1 2)", Error),
-                // Test lambda parameter errors
-                ("(lambda (x x) x)", Error),           // Duplicate params
-                ("(lambda \"not-a-list\" 42)", Error), // Invalid params
-                // Test define errors
-                ("(define 123 42)", Error),            // Invalid var name
-                ("(define \"not-symbol\" 42)", Error), // Invalid var name
-                // Note: Arity errors are now caught at parse time - see parser.rs tests
-            ];
-
-            run_comprehensive_tests(test_cases);
-        }
-
-        #[test]
-        fn test_environment_scoping_edge_cases() {
-            let test_environments = vec![
-                // Environment 1: Global vs local scope (parameter shadowing)
-                TestEnvironment(vec![
-                    test_setup!("(define x 1)"),
-                    test_setup!("(define f (lambda (x) (+ x 10)))"), // parameter x shadows global x
-                    ("(f 5)", success(15)), // uses parameter x=5, not global x=1
-                    ("x", success(1)),      // global x unchanged
-                    ("(f x)", success(11)), // uses global x=1 as argument: 1+10=11
-                ]),
-                // Environment 2: Closure behavior with variable redefinition
-                TestEnvironment(vec![
-                    test_setup!("(define y 100)"),
-                    test_setup!("(define g (lambda () y))"), // closure captures y=100
-                    test_setup!("(define y 200)"),           // redefine y to 200
-                    // This implementation uses lexical scoping - closures see binding at definition time
-                    ("(g)", success(100)), // closure still sees original y=100
-                    ("y", success(200)),   // global y is now 200
-                ]),
-                // Environment 3: Nested function definitions (higher-order functions)
-                TestEnvironment(vec![
-                    test_setup!("(define outer (lambda (a) (lambda (b) (+ a b))))"),
-                    test_setup!("(define add10 (outer 10))"), // creates a function that adds 10
-                    ("(add10 5)", success(15)),     // 10 + 5 = 15
-                    ("(add10 25)", success(35)),    // 10 + 25 = 35
-                    ("((outer 3) 7)", success(10)), // direct call: 3 + 7 = 10
-                ]),
-            ];
-
-            run_tests_in_environment(test_environments);
-        }
-    }
-
-    /// Helper function to parse and evaluate a string expression
-    fn eval_string_with_env(input: &str, env: &mut Environment) -> Result<Value, SchemeError> {
-        let expr = parse(input)?;
-        eval(&expr, env)
-    }
-
-    /// Helper function to parse and evaluate with fresh environment
-    fn eval_fresh(input: &str) -> Result<Value, SchemeError> {
-        let mut env = create_global_env();
-        eval_string_with_env(input, &mut env)
-    }
-
-    #[test]
-    fn test_define_and_variables() {
-        let test_environments = vec![TestEnvironment(vec![
-            // Define a variable
-            test_setup!("(define x 42)"),
-            ("x", success(42)),
-            // Use variable in expressions
-            ("(+ x 8)", success(50)),
-            // Redefine variable
-            test_setup!("(define x 100)"),
-            ("x", success(100)),
-        ])];
-
-        run_tests_in_environment(test_environments);
-    }
-
-    #[test]
-    fn test_lambda_and_function_calls() {
-        let test_environments = vec![
+            ]),
+            // === ENVIRONMENT SCOPING EDGE CASES (Test 1) ===
+            // Global vs local scope (parameter shadowing)
+            TestEnvironment(vec![
+                test_setup!("(define x 1)"),
+                test_setup!("(define f (lambda (x) (+ x 10)))"), // parameter x shadows global x
+                ("(f 5)", success(15)), // uses parameter x=5, not global x=1
+                ("x", success(1)),      // global x unchanged
+                ("(f x)", success(11)), // uses global x=1 as argument: 1+10=11
+            ]),
+            // === ENVIRONMENT SCOPING EDGE CASES (Test 2) ===
+            // Closure behavior with variable redefinition
+            TestEnvironment(vec![
+                test_setup!("(define y 100)"),
+                test_setup!("(define g (lambda () y))"), // closure captures y=100
+                test_setup!("(define y 200)"),           // redefine y to 200
+                // This implementation uses lexical scoping - closures see binding at definition time
+                ("(g)", success(100)), // closure still sees original y=100
+                ("y", success(200)),   // global y is now 200
+            ]),
+            // === ENVIRONMENT SCOPING EDGE CASES (Test 3) ===
+            // Nested function definitions (higher-order functions)
+            TestEnvironment(vec![
+                test_setup!("(define outer (lambda (a) (lambda (b) (+ a b))))"),
+                test_setup!("(define add10 (outer 10))"), // creates a function that adds 10
+                ("(add10 5)", success(15)),               // 10 + 5 = 15
+                ("(add10 25)", success(35)),              // 10 + 25 = 35
+                ("((outer 3) 7)", success(10)),           // direct call: 3 + 7 = 10
+            ]),
+            // === LAMBDA AND FUNCTION CALLS (Test 1) ===
             // Test valid lambda definitions and calls
             TestEnvironment(vec![
                 // Define a simple lambda
@@ -1148,6 +904,7 @@ mod tests {
                 test_setup!("(define get-answer (lambda () 42))"),
                 ("(get-answer)", success(42)),
             ]),
+            // === LAMBDA AND FUNCTION CALLS (Test 2) ===
             // Test error cases for lambda (each in separate environment to avoid interference)
             TestEnvironment(vec![
                 // Duplicate parameter names should be rejected
@@ -1159,38 +916,41 @@ mod tests {
                 ("(lambda (1 2) (+ 1 2))", Error),
                 ("(lambda (\"x\" y) (+ x y))", Error),
             ]),
+            // === COMPLEX EXPRESSIONS (Test 1) ===
+            // Test complex nested expression in isolation
+            TestEnvironment(vec![(
+                "(((lambda (x) (lambda (y) (+ x y))) 10) 5)",
+                success(15),
+            )]),
+            // === COMPLEX EXPRESSIONS (Test 2) ===
+            // Test list processing functions
+            TestEnvironment(vec![
+                // Simple list processing (non-recursive version)
+                test_setup!("(define first (lambda (lst) (car lst)))"),
+                ("(first (list 1 2 3 4))", success(1)),
+                // Test list construction and access
+                test_setup!("(define make-pair (lambda (a b) (list a b)))"),
+                test_setup!("(define get-first (lambda (pair) (car pair)))"),
+                test_setup!("(define get-second (lambda (pair) (car (cdr pair))))"),
+                test_setup!("(define my-pair (make-pair 42 \"hello\"))"),
+                ("(get-first my-pair)", success(42)),
+                ("(get-second my-pair)", success("hello")),
+            ]),
         ];
 
-        run_tests_in_environment(test_environments);
+        run_tests_in_environment(environment_test_cases);
     }
 
+    // Additional type check that can't be done data-driven
     #[test]
-    fn test_higher_order_functions() {
-        let test_environments = vec![TestEnvironment(vec![
-            // Define a function that takes another function as argument
-            test_setup!("(define twice (lambda (f x) (f (f x))))"),
-            test_setup!("(define inc (lambda (x) (+ x 1)))"),
-            ("(twice inc 5)", success(7)),
-        ])];
-
-        run_tests_in_environment(test_environments);
-    }
-
-    #[test]
-    fn test_lexical_scoping() {
-        let test_environments = vec![TestEnvironment(vec![
-            // Test that lambda captures its environment
-            test_setup!("(define x 10)"),
-            test_setup!("(define make-adder (lambda (n) (lambda (x) (+ x n))))"),
-            test_setup!("(define add5 (make-adder 5))"),
-            ("(add5 3)", success(8)),
-            // Test parameter shadowing
-            test_setup!("(define f (lambda (x) (lambda (x) (* x 2))))"),
-            test_setup!("(define g (f 10))"),
-            ("(g 3)", success(6)),
-        ])];
-
-        run_tests_in_environment(test_environments);
+    fn test_builtin_function_self_evaluation() {
+        let mut env = create_global_env();
+        eval(&parse("(define f +)").unwrap(), &mut env).unwrap();
+        let result = eval(&parse("f").unwrap(), &mut env).unwrap();
+        match result {
+            Value::BuiltinFunction { .. } => {} // Self-evaluating
+            _ => panic!("Expected BuiltinFunction to be self-evaluating"),
+        }
     }
 
     #[test]
@@ -1214,147 +974,5 @@ mod tests {
         eval_string_with_env("(define fib (lambda (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))", &mut env).unwrap();
         assert_eq!(eval_string_with_env("(fib 6)", &mut env).unwrap(), val(8));
         */
-    }
-
-    #[test]
-    fn test_complex_expressions() {
-        let test_environments = vec![
-            // Test complex nested expression in isolation
-            TestEnvironment(vec![
-                ("(((lambda (x) (lambda (y) (+ x y))) 10) 5)", success(15)),
-            ]),
-            // Test list processing functions
-            TestEnvironment(vec![
-                // Simple list processing (non-recursive version)
-                test_setup!("(define first (lambda (lst) (car lst)))"),
-                ("(first (list 1 2 3 4))", success(1)),
-                // Test list construction and access
-                test_setup!("(define make-pair (lambda (a b) (list a b)))"),
-                test_setup!("(define get-first (lambda (pair) (car pair)))"),
-                test_setup!("(define get-second (lambda (pair) (car (cdr pair))))"),
-                test_setup!("(define my-pair (make-pair 42 \"hello\"))"),
-                ("(get-first my-pair)", success(42)),
-                ("(get-second my-pair)", success("hello")),
-            ]),
-        ];
-
-        run_tests_in_environment(test_environments);
-    }
-
-    #[test]
-    fn test_error_cases() {
-        // Convert basic error cases to data-driven approach  
-        let test_cases = vec![
-            // Unbound variables
-            ("undefined-var", Error),
-            ("(set! x 42)", Error), // Unsupported special forms appear as unbound variables
-            // Type errors
-            ("(+ 1 \"hello\")", Error), // Adding number and string
-            // Note: Parse errors are now tested in parser.rs
-            // Arity works for + with one argument
-            ("(+ 1)", success(1)), // + can take any number of arguments, including 1
-        ];
-
-        run_comprehensive_tests(test_cases);
-
-        // Specific error type verification for cases that need detailed checking
-        match eval_fresh("(car)") {
-            Err(SchemeError::ArityError {
-                expected,
-                got,
-                expression,
-            }) => {
-                assert_eq!(expected, 1);
-                assert_eq!(got, 0);
-                assert_eq!(expression.as_deref(), Some("(car)"));
-            }
-            _ => panic!("Expected arity error for car with no arguments"),
-        }
-
-        match eval_fresh("(set! x 42)") {
-            Err(SchemeError::UnboundVariable(var)) => {
-                assert_eq!(var, "set!");
-            }
-            _ => panic!("Expected unbound variable error for set!"),
-        }
-    }
-
-    #[test]
-    fn test_unified_nil_representation() {
-        let mut env = create_global_env();
-
-        // Test that parsing () creates an empty list (unified nil representation)
-        let empty_list = parse("()").unwrap();
-        assert_eq!(empty_list, nil());
-        assert!(empty_list.is_nil());
-        assert_eq!(format!("{}", empty_list), "()");
-
-        // Test strict evaluation semantics: () is NOT self-evaluating
-        assert!(matches!(
-            eval(&empty_list, &mut env),
-            Err(SchemeError::EvalError(_))
-        ));
-
-        // Test that quoted empty list works fine and represents nil
-        let quoted_empty_result = eval_string_with_env("'()", &mut env).unwrap();
-        assert_eq!(quoted_empty_result, nil());
-        assert!(quoted_empty_result.is_nil());
-        assert_eq!(format!("{}", quoted_empty_result), "()");
-
-        // Test quote longhand syntax
-        let quote_longhand_result = eval_string_with_env("(quote ())", &mut env).unwrap();
-        assert_eq!(quote_longhand_result, nil());
-        assert!(quote_longhand_result.is_nil());
-
-        // Test that both quoted forms are equivalent
-        assert_eq!(quoted_empty_result, quote_longhand_result);
-
-        // Convert some nil operations to data-driven approach
-        let test_environments = vec![TestEnvironment(vec![
-            // null? predicate tests
-            ("(null? '())", success(true)),
-            ("(null? (quote ()))", success(true)),
-            ("(null? (list))", success(true)),
-            ("(null? 42)", success(false)),
-            ("(null? #f)", success(false)),
-            // cons with nil
-            ("(cons 1 '())", success([1])),
-            ("(cons 'a (cons 'b '()))", success([sym("a"), sym("b")])),
-            // Basic nil representations 
-            ("'()", success(nil())),
-            ("(quote ())", success(nil())),
-            ("(list)", success(nil())),
-            ("(if #f 42 '())", success(nil())),
-            // Lambda with empty parameter list
-            ("((lambda () 42))", success(42)),
-        ])];
-
-        run_tests_in_environment(test_environments);
-
-        // Test strict boolean semantics: if rejects non-boolean conditions (including nil)
-        let error_test_cases = vec![
-            ("(if '() 1 2)", Error),  // nil as condition should error
-            ("(if 0 1 2)", Error),    // 0 as condition should error
-        ];
-
-        run_comprehensive_tests(error_test_cases);
-
-        // Test list creation and manipulation
-        assert_eq!(eval_string_with_env("(list)", &mut env).unwrap(), nil());
-        assert!(eval_string_with_env("(list)", &mut env).unwrap().is_nil());
-
-        // Test that nil displays consistently
-        let various_nils = vec![
-            eval_string_with_env("'()", &mut env).unwrap(),
-            eval_string_with_env("(quote ())", &mut env).unwrap(),
-            eval_string_with_env("(list)", &mut env).unwrap(),
-            eval_string_with_env("(if #f '() '())", &mut env).unwrap(),
-        ];
-
-        for nil_val in various_nils {
-            assert!(nil_val.is_nil());
-            assert_eq!(format!("{}", nil_val), "()");
-            assert_eq!(nil_val, nil());
-        }
     }
 }

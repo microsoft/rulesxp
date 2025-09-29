@@ -67,10 +67,14 @@ fn parse_decimal(input: &str) -> IResult<&str, Value> {
 
     match number_str.parse::<i64>() {
         Ok(n) => Ok((input, Value::Number(n))),
-        Err(_) => Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Digit,
-        ))),
+        Err(_) => {
+            // Parse failed - could be due to overflow or invalid format
+            // Symbol parsing will reject this anyway since it starts with digits
+            Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Digit,
+            )))
+        }
     }
 }
 
@@ -99,6 +103,18 @@ fn parse_bool(input: &str) -> IResult<&str, Value> {
 
 /// Parse a symbol (identifier)
 fn parse_symbol(input: &str) -> IResult<&str, Value> {
+    // Don't parse symbols that start with digits or look like numbers
+    if let Some(first_char) = input.chars().next() {
+        if first_char.is_ascii_digit()
+            || (first_char == '-' && input.chars().nth(1).map_or(false, |c| c.is_ascii_digit()))
+        {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Alpha,
+            )));
+        }
+    }
+
     map(
         take_while1(|c: char| c.is_alphanumeric() || "+-*/<>=!?_".contains(c)),
         |s: &str| Value::Symbol(s.to_string()),
@@ -127,7 +143,13 @@ fn parse_string(input: &str) -> IResult<&str, Value> {
                     'r' => '\r',
                     '\\' => '\\',
                     '"' => '"',
-                    c => c, // For now, just keep the character as-is
+                    _ => {
+                        // Unknown escape sequence - return error
+                        return Err(nom::Err::Error(nom::error::Error::new(
+                            remaining,
+                            nom::error::ErrorKind::Char,
+                        )));
+                    }
                 };
                 chars.push(escaped_char);
                 remaining = &remaining[2..];
@@ -299,9 +321,11 @@ mod tests {
     /// Test result variants for comprehensive parsing tests
     #[derive(Debug)]
     enum ParseTestResult {
-        Success(Value),              // Parsing should succeed with this value
-        SpecificError(&'static str), // Parsing should fail with error containing this string
-        Error,                       // Parsing should fail (any error)
+        Success(Value), // Parsing should succeed with this value
+        SuccessPrecompiledOp(&'static str, Vec<Value>), // Should succeed with PrecompiledOp(scheme_id, args)
+        SemanticallyEquivalent(Value), // Should succeed and be semantically equivalent (for quote shorthand)
+        SpecificError(&'static str),   // Parsing should fail with error containing this string
+        Error,                         // Parsing should fail (any error)
     }
     use ParseTestResult::*;
 
@@ -310,30 +334,110 @@ mod tests {
         Success(value.into())
     }
 
-    /// Run comprehensive parse tests with detailed error reporting
+    /// Helper for PrecompiledOp test cases
+    fn precompiled_op(scheme_id: &'static str, args: Vec<Value>) -> ParseTestResult {
+        SuccessPrecompiledOp(scheme_id, args)
+    }
+
+    /// Helper for SemanticallyEquivalent test cases (used for quote shorthand)
+    fn semantically_equivalent<T: Into<Value>>(value: T) -> ParseTestResult {
+        SemanticallyEquivalent(value.into())
+    }
+
+    /// Run comprehensive parse tests with simplified error reporting and round-trip validation
     fn run_parse_tests(test_cases: Vec<(&str, ParseTestResult)>) {
         for (i, (input, expected)) in test_cases.iter().enumerate() {
             let test_id = format!("Parse test #{}", i + 1);
-            
-            match (parse(input), expected) {
+            let result = parse(input);
+
+            match (result, expected) {
+                // Success cases with round-trip testing
                 (Ok(actual), Success(expected_val)) => {
-                    if actual != *expected_val {
+                    assert_eq!(actual, *expected_val, "{}: value mismatch", test_id);
+
+                    // Test round-trip: display -> parse -> display should be identical
+                    let displayed = format!("{}", actual);
+                    let reparsed = parse(&displayed).unwrap_or_else(|e| {
                         panic!(
-                            "{}: expected {:?}, got {:?}",
-                            test_id, expected_val, actual
+                            "{}: round-trip parse failed for '{}': {:?}",
+                            test_id, displayed, e
+                        )
+                    });
+                    let redisplayed = format!("{}", reparsed);
+                    assert_eq!(
+                        displayed, redisplayed,
+                        "{}: round-trip display mismatch for '{}'",
+                        test_id, input
+                    );
+                }
+
+                (Ok(actual), SuccessPrecompiledOp(expected_scheme_id, expected_args)) => {
+                    if let Value::PrecompiledOp { op_id, args, .. } = &actual {
+                        assert_eq!(
+                            op_id, *expected_scheme_id,
+                            "{}: scheme_id mismatch",
+                            test_id
                         );
+                        assert_eq!(args, expected_args, "{}: args mismatch", test_id);
+
+                        // Test round-trip for PrecompiledOp
+                        let displayed = format!("{}", actual);
+                        let reparsed = parse(&displayed).unwrap_or_else(|e| {
+                            panic!(
+                                "{}: round-trip parse failed for '{}': {:?}",
+                                test_id, displayed, e
+                            )
+                        });
+                        let redisplayed = format!("{}", reparsed);
+                        assert_eq!(
+                            displayed, redisplayed,
+                            "{}: round-trip display mismatch for '{}'",
+                            test_id, input
+                        );
+                    } else {
+                        panic!("{}: expected PrecompiledOp, got {:?}", test_id, actual);
                     }
                 }
-                (Err(_), Error) => {} // Expected generic error
-                (Err(e), SpecificError(expected_text)) => {
-                    let error_msg = format!("{:?}", e);
-                    if !error_msg.contains(expected_text) {
+
+                (Ok(actual), SemanticallyEquivalent(expected_val)) => {
+                    // For semantically equivalent cases, we compare the uncompiled forms
+                    // This is useful for quote shorthand ('foo vs (quote foo))
+                    let actual_uncompiled = actual.to_uncompiled_form();
+                    assert_eq!(
+                        actual_uncompiled, *expected_val,
+                        "{}: semantic equivalence mismatch",
+                        test_id
+                    );
+
+                    // Test round-trip for SemanticallyEquivalent
+                    let displayed = format!("{}", actual);
+                    let reparsed = parse(&displayed).unwrap_or_else(|e| {
                         panic!(
-                            "{}: error should contain '{}', got: {}",
-                            test_id, expected_text, error_msg
-                        );
-                    }
+                            "{}: round-trip parse failed for '{}': {:?}",
+                            test_id, displayed, e
+                        )
+                    });
+                    let redisplayed = format!("{}", reparsed);
+                    assert_eq!(
+                        displayed, redisplayed,
+                        "{}: round-trip display mismatch for '{}'",
+                        test_id, input
+                    );
                 }
+
+                // Error cases (success)
+                (Err(_), Error) => {} // Generic error case passes
+                (Err(err), SpecificError(expected_text)) => {
+                    let error_msg = format!("{:?}", err);
+                    assert!(
+                        error_msg.contains(expected_text),
+                        "{}: error should contain '{}'",
+                        test_id,
+                        expected_text
+                    );
+                }
+
+                // Mismatched cases (failures)
                 (Ok(actual), Error) => {
                     panic!("{}: expected error, got {:?}", test_id, actual);
                 }
@@ -343,10 +447,16 @@ mod tests {
                         test_id, expected_text, actual
                     );
                 }
-                (Err(err), Success(expected_val)) => {
+                (Err(err), Success(_)) => {
+                    panic!("{}: expected success, got error {:?}", test_id, err);
+                }
+                (Err(err), SuccessPrecompiledOp(_, _)) => {
+                    panic!("{}: expected PrecompiledOp, got error {:?}", test_id, err);
+                }
+                (Err(err), SemanticallyEquivalent(_)) => {
                     panic!(
-                        "{}: expected {:?}, got error {:?}",
-                        test_id, expected_val, err
+                        "{}: expected SemanticallyEquivalent, got error {:?}",
+                        test_id, err
                     );
                 }
             }
@@ -354,52 +464,38 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_number() {
-        let test_cases = vec![
-            // Decimal numbers
-            ("42", success(val(42))),
-            ("-5", success(val(-5))),
-            ("0", success(val(0))),
-            ("-0", success(val(0))),
-            
-            // Hexadecimal numbers
-            ("#x1A", success(val(26))),
-            ("#X1a", success(val(26))),
-            ("#xff", success(val(255))),
-            ("#xFF", success(val(255))),
-            ("#x0", success(val(0))),
-            ("#x12345", success(val(74565))),
-            
-            // Edge cases - large integer literals
-            ("9223372036854775807", success(val(9223372036854775807i64))), // max i64
-            ("-9223372036854775808", success(val(-9223372036854775808i64))), // min i64
-            
-            // Should fail
-            ("3.14", Error), // Floating point should fail
-            ("", Error), // Empty should fail
-            ("#xG", Error), // Invalid hexadecimal should fail
-            ("#x", Error), // Incomplete hex should fail
-            ("#y123", Error), // Invalid hex prefix should fail
-            ("123abc", Error), // Mixed should fail
-        ];
-        
-        run_parse_tests(test_cases);
-        
-        // Note: Rust's i64::from_str handles overflow by wrapping, so these might not fail as expected
-        // Let's test what actually happens with very large numbers
-        let result = parse("99999999999999999999");
-        // This might succeed due to wrapping, so we just verify it parses to something
-        assert!(result.is_ok() || result.is_err()); // Either behavior is acceptable
-    }
+    fn test_parser_comprehensive() {
+        use crate::builtinops::find_scheme_op;
 
-    #[test]
-    fn test_parse_symbol() {
         let test_cases = vec![
+            // ===== NUMBER PARSING =====
+            // Decimal numbers
+            ("42", success(42)),
+            ("-5", success(-5)),
+            ("0", success(0)),
+            ("-0", success(0)),
+            // Hexadecimal numbers
+            ("#x1A", success(26)),
+            ("#X1a", success(26)), // Test case-insensitivity
+            ("#xff", success(255)),
+            ("#x0", success(0)),
+            ("#x12345", success(74565)),
+            // Edge cases - large integer literals
+            ("9223372036854775807", success(9223372036854775807i64)), // max i64
+            ("-9223372036854775808", success(-9223372036854775808i64)), // min i64
+            // Number parsing failures
+            ("3.14", Error),                  // Floating point should fail
+            ("#xG", Error),                   // Invalid hexadecimal should fail
+            ("#x", Error),                    // Incomplete hex should fail
+            ("#y123", Error),                 // Invalid hex prefix should fail
+            ("123abc", Error),                // Mixed should fail
+            ("99999999999999999999", Error),  // Too large for i64
+            ("-99999999999999999999", Error), // Too small for i64
+            // ===== SYMBOL PARSING =====
             // Basic symbols
             ("foo", success(sym("foo"))),
             ("+", success(sym("+"))),
             (">=", success(sym(">="))),
-            
             // Test all allowed special characters
             ("test-name", success(sym("test-name"))),
             ("test*name", success(sym("test*name"))),
@@ -410,436 +506,201 @@ mod tests {
             ("test!name", success(sym("test!name"))),
             ("test?name", success(sym("test?name"))),
             ("test_name", success(sym("test_name"))),
-            
             // Alphanumeric combinations
             ("var123", success(sym("var123"))),
-            
             // Invalid - numbers at start cause parse error
             ("123var", Error),
-        ];
-        
-        run_parse_tests(test_cases);
-    }
-
-    #[test]
-    fn test_parse_bool() {
-        let test_cases = vec![
+            // ===== BOOLEAN PARSING =====
             // Valid booleans
-            ("#t", success(val(true))),
-            ("#f", success(val(false))),
-            
+            ("#t", success(true)),
+            ("#f", success(false)),
             // Should fail - case sensitive
             ("#T", Error),
             ("#F", Error),
             ("#true", Error),
             ("#false", Error),
-        ];
-        
-        run_parse_tests(test_cases);
-    }
-
-    #[test]
-    fn test_parse_string() {
-        let test_cases = vec![
+            // ===== STRING PARSING =====
             // Basic strings
-            ("\"hello\"", success(val("hello"))),
-            ("\"hello world\"", success(val("hello world"))),
-            
-            // Test escape sequences
-            ("\"hello\\nworld\"", success(val("hello\nworld"))),
-            ("\"tab\\there\"", success(val("tab\there"))),
-            ("\"carriage\\rreturn\"", success(val("carriage\rreturn"))),
-            ("\"quote\\\"test\"", success(val("quote\"test"))),
-            ("\"backslash\\\\test\"", success(val("backslash\\test"))),
-            
-            // Test unknown escape - the parser keeps the character as-is, removing the backslash
-            ("\"other\\xchar\"", success(val("otherxchar"))),
-            
+            ("\"hello\"", success("hello")),
+            ("\"hello world\"", success("hello world")),
+            // Test escape sequences (using raw strings for clarity)
+            (r#""hello\nworld""#, success("hello\nworld")),
+            (r#""tab\there""#, success("tab\there")),
+            (r#""carriage\rreturn""#, success("carriage\rreturn")),
+            (r#""quote\"test""#, success("quote\"test")),
+            (r#""backslash\\test""#, success("backslash\\test")),
+            // Test unknown escape sequences (should fail)
+            (r#""other\xchar""#, Error), // Unknown escape \x
+            (r#""test\zchar""#, Error),  // Unknown escape \z
             // Test empty string
-            ("\"\"", success(val(""))),
-            
+            ("\"\"", success("")),
             // Test unterminated string (should fail)
-            ("\"unterminated", Error),
-            ("\"unterminated\\", Error), // ends with backslash
-            ("\"test\\\"", Error), // string with just escape at end
-        ];
-        
-        run_parse_tests(test_cases);
-    }
-
-    #[test]
-    fn test_parse_nil() {
-        let test_cases = vec![
+            (r#""unterminated"#, Error),
+            (r#""unterminated\"#, Error), // ends with backslash
+            (r#""test\""#, Error),        // string with just escape at end
+            // ===== NIL PARSING =====
             ("()", success(nil())),
-        ];
-        
-        run_parse_tests(test_cases);
-    }
-
-    #[test]
-    fn test_parse_quote() {
-        // Test quote shorthand - with precompilation enabled, should create PrecompiledOp
-        if let Value::PrecompiledOp { op_id, args, .. } = parse("'foo").unwrap() {
-            assert_eq!(op_id, "quote");
-            assert_eq!(args.len(), 1);
-            assert_eq!(args[0], sym("foo"));
-        } else {
-            panic!("Expected PrecompiledOp for precompiled quote parse");
-        }
-
-        // Test quote with list - should create PrecompiledOp with unprecompiled content
-        if let Value::PrecompiledOp { op_id, args, .. } = parse("'(1 2 3)").unwrap() {
-            assert_eq!(op_id, "quote");
-            assert_eq!(args.len(), 1);
-            assert_eq!(args[0], val([1, 2, 3]));
-        } else {
-            panic!("Expected PrecompiledOp for precompiled quote parse");
-        }
-
-        // Test quote with nil - should create PrecompiledOp with empty list content
-        if let Value::PrecompiledOp { op_id, args, .. } = parse("'()").unwrap() {
-            assert_eq!(op_id, "quote");
-            assert_eq!(args.len(), 1);
-            assert_eq!(args[0], nil());
-        } else {
-            panic!("Expected PrecompiledOp for precompiled quote parse");
-        }
-    }
-
-    #[test]
-    fn test_parse_list() {
-        // Empty list (nil)
-        assert_eq!(parse("()").unwrap(), nil());
-
-        // Single element list
-        assert_eq!(parse("(42)").unwrap(), val([42]));
-
-        // Regular list with mixed types - can't fully convert due to symbol limitations
-        assert_eq!(
-            parse("(1 hello \"world\" #t)").unwrap(),
-            val([val(1), sym("hello"), val("world"), val(true)])
-        );
-
-        // Regular list (not a builtin operation)
-        assert_eq!(parse("(1 2 3)").unwrap(), val([1, 2, 3]));
-
-        // Test that builtin operations are parsed as PrecompiledOp
-        match parse("(+ 1 2)").unwrap() {
-            Value::PrecompiledOp { op_id, args, .. } => {
-                assert_eq!(op_id, "+");
-                assert_eq!(args, vec![val(1), val(2)]);
-            }
-            other => panic!("Expected PrecompiledOp, got {:?}", other),
-        }
-
-        // Test multiple builtin operations
-        match parse("(* 3 4 5)").unwrap() {
-            Value::PrecompiledOp { op_id, args, .. } => {
-                assert_eq!(op_id, "*");
-                assert_eq!(args, vec![val(3), val(4), val(5)]);
-            }
-            other => panic!("Expected PrecompiledOp, got {:?}", other),
-        }
-
-        // Test builtin comparison operations
-        match parse("(< 1 2)").unwrap() {
-            Value::PrecompiledOp { op_id, args, .. } => {
-                assert_eq!(op_id, "<");
-                assert_eq!(args, vec![val(1), val(2)]);
-            }
-            other => panic!("Expected PrecompiledOp, got {:?}", other),
-        }
-
-        // Test builtin special forms
-        match parse("(if #t 1 2)").unwrap() {
-            Value::PrecompiledOp { op_id, args, .. } => {
-                assert_eq!(op_id, "if");
-                assert_eq!(args, vec![val(true), val(1), val(2)]);
-            }
-            other => panic!("Expected PrecompiledOp, got {:?}", other),
-        }
-
-        // Test that non-builtin symbols still create regular lists
-        assert_eq!(
-            parse("(foo 1 2)").unwrap(),
-            val([sym("foo"), val(1), val(2)])
-        );
-
-        // Test that quote IS precompiled (like other special forms)
-        match parse("(quote foo)").unwrap() {
-            Value::PrecompiledOp { op_id, args, .. } => {
-                assert_eq!(op_id, "quote");
-                assert_eq!(args, vec![sym("foo")]);
-            }
-            other => panic!("Expected PrecompiledOp for quote, got {:?}", other),
-        }
-
-        // Test nested lists with mixed builtins and regular lists
-        match parse("((+ 1 2) (foo bar))").unwrap() {
-            Value::List(elements) => {
-                assert_eq!(elements.len(), 2);
-                // First element should be PrecompiledOp
-                match &elements[0] {
-                    Value::PrecompiledOp { op_id, args, .. } => {
-                        assert_eq!(op_id, "+");
-                        assert_eq!(args, &vec![val(1), val(2)]);
-                    }
-                    other => panic!("Expected PrecompiledOp, got {:?}", other),
-                }
-                // Second element should be regular list
-                assert_eq!(elements[1], val([sym("foo"), sym("bar")]));
-            }
-            other => panic!("Expected List, got {:?}", other),
-        }
-
-        // Test list with only symbols (should remain a list)
-        assert_eq!(
-            parse("(a b c)").unwrap(),
-            val([sym("a"), sym("b"), sym("c")])
-        );
-
-        // Test list starting with number (should remain a list)
-        assert_eq!(
-            parse("(42 is the answer)").unwrap(),
-            val([val(42), sym("is"), sym("the"), sym("answer")])
-        );
-    }
-
-    #[test]
-    fn test_parse_nested_list() {
-        let test_cases = vec![
-            ("((1 2) (3 4))", success(val([[1, 2], [3, 4]]))),
-        ];
-        
-        run_parse_tests(test_cases);
-    }
-
-    #[test]
-    fn test_whitespace_handling() {
-        let test_cases = vec![
+            // ===== LIST PARSING =====
+            // Single element list
+            ("(42)", success([42])),
+            // Regular list with mixed types
+            (
+                "(1 hello \"world\" #t)",
+                success([val(1), sym("hello"), val("world"), val(true)]),
+            ),
+            // Regular list (not a builtin operation)
+            ("(1 2 3)", success([1, 2, 3])),
+            // Test that builtin operations are parsed as PrecompiledOp
+            ("(+ 1 2)", precompiled_op("+", vec![val(1), val(2)])),
+            (
+                "(* 3 4 5)",
+                precompiled_op("*", vec![val(3), val(4), val(5)]),
+            ),
+            ("(< 1 2)", precompiled_op("<", vec![val(1), val(2)])),
+            (
+                "(if #t 1 2)",
+                precompiled_op("if", vec![val(true), val(1), val(2)]),
+            ),
+            // Test that non-builtin symbols still create regular lists
+            ("(foo 1 2)", success([sym("foo"), val(1), val(2)])),
+            // Test list with only symbols (should remain a list)
+            ("(a b c)", success([sym("a"), sym("b"), sym("c")])),
+            // Test list starting with number (should remain a list)
+            (
+                "(42 is the answer)",
+                success([val(42), sym("is"), sym("the"), sym("answer")]),
+            ),
+            // ===== QUOTE PARSING =====
+            // Quote shorthand - semantically equivalent to longhand
+            (
+                "'foo",
+                semantically_equivalent(val([sym("quote"), sym("foo")])),
+            ),
+            (
+                "'(1 2 3)",
+                semantically_equivalent(val([sym("quote"), val([1, 2, 3])])),
+            ),
+            ("'()", semantically_equivalent(val([sym("quote"), nil()]))),
+            // Longhand quote syntax - should create PrecompiledOp
+            ("(quote foo)", precompiled_op("quote", vec![sym("foo")])),
+            (
+                "(quote (1 2 3))",
+                precompiled_op("quote", vec![val([1, 2, 3])]),
+            ),
+            // ===== NESTED LIST PARSING =====
+            ("((1 2) (3 4))", success([[1, 2], [3, 4]])),
+            // Test nested lists with mixed builtins and regular lists
+            (
+                "((+ 1 2) (foo bar))",
+                success([
+                    val(Value::PrecompiledOp {
+                        op: find_scheme_op("+").unwrap(),
+                        op_id: "+".to_string(),
+                        args: vec![val(1), val(2)],
+                    }),
+                    val([sym("foo"), sym("bar")]),
+                ]),
+            ),
+            // Test nested expressions that should parse successfully
+            (
+                "(car (list 1 2 3))",
+                precompiled_op(
+                    "car",
+                    vec![val(Value::PrecompiledOp {
+                        op: find_scheme_op("list").unwrap(),
+                        op_id: "list".to_string(),
+                        args: vec![val(1), val(2), val(3)],
+                    })],
+                ),
+            ),
+            // ===== WHITESPACE HANDLING =====
             // Test various whitespace scenarios
-            ("  42  ", success(val(42))),
-            ("\t#t\n", success(val(true))),
+            ("  42  ", success(42)),
+            ("\t#t\n", success(true)),
             ("\r\n  foo  \t", success(sym("foo"))),
-            
             // Lists with various whitespace
-            ("( 1   2\t\n3 )", success(val([1, 2, 3]))),
-            
+            ("( 1   2\t\n3 )", success([1, 2, 3])),
             // Empty list with whitespace
             ("(   )", success(nil())),
             ("(\t\n)", success(nil())),
-        ];
-        
-        run_parse_tests(test_cases);
-    }
-
-    #[test]
-    fn test_error_cases() {
-        let test_cases = vec![
+            // ===== COMPLEX NESTED STRUCTURES =====
+            // Deeply nested lists
+            ("(((1)))", success([val([val([val(1)])])])),
+            // Mixed types in nested structure
+            (
+                "(foo (\"bar\" #t) -123)",
+                success([sym("foo"), val([val("bar"), val(true)]), val(-123)]),
+            ),
+            // ===== GENERAL ERROR CASES =====
             // Mismatched parentheses
             ("(1 2 3", Error), // Missing closing
             ("1 2 3)", Error), // Extra closing
             ("((1 2)", Error), // Nested missing closing
-            
             // Empty input
             ("", Error),
             ("   ", Error), // Just whitespace
-            
             // Invalid characters at start
             (")", Error),
             ("@invalid", Error),
-            
             // Multiple expressions (should fail for main parse function)
             ("1 2", Error),
             ("(+ 1 2) (+ 3 4)", Error),
-        ];
-        
-        run_parse_tests(test_cases);
-    }
-
-    #[test]
-    fn test_arity_errors_at_parse_time() {
-        // Test that arity errors are caught during parsing, not evaluation
-
-        // Test 'not' with no arguments (expects exactly 1)
-        match parse("(not)") {
-            Err(SchemeError::ArityError {
-                expected,
-                got,
-                expression,
-            }) => {
-                assert_eq!(expected, 1);
-                assert_eq!(got, 0);
-                assert_eq!(expression.as_deref(), Some("(not)"));
-            }
-            other => panic!("Expected arity error for (not), got {:?}", other),
-        }
-
-        // Test 'not' with too many arguments (expects exactly 1)
-        match parse("(not #t #f)") {
-            Err(SchemeError::ArityError {
-                expected,
-                got,
-                expression,
-            }) => {
-                assert_eq!(expected, 1);
-                assert_eq!(got, 2);
-                assert_eq!(expression.as_deref(), Some("(not #t #f)"));
-            }
-            other => panic!("Expected arity error for (not #t #f), got {:?}", other),
-        }
-
-        // Test 'car' with no arguments (expects exactly 1)
-        match parse("(car)") {
-            Err(SchemeError::ArityError {
-                expected,
-                got,
-                expression,
-            }) => {
-                assert_eq!(expected, 1);
-                assert_eq!(got, 0);
-                assert_eq!(expression.as_deref(), Some("(car)"));
-            }
-            other => panic!("Expected arity error for (car), got {:?}", other),
-        }
-
-        // Test '+' with valid arity (should succeed)
-        assert!(parse("(+ 1 2)").is_ok());
-
-        // Test nested arity errors are also caught
-        match parse("(list (not) 42)") {
-            Err(SchemeError::ArityError {
-                expected,
-                got,
-                expression,
-            }) => {
-                assert_eq!(expected, 1);
-                assert_eq!(got, 0);
-                assert_eq!(expression.as_deref(), Some("(not)"));
-            }
-            other => panic!("Expected arity error for nested (not), got {:?}", other),
-        }
-
-        // Test that valid expressions still parse successfully
-        assert!(parse("(not #t)").is_ok());
-        assert!(parse("(car (list 1 2 3))").is_ok());
-        assert!(parse("(+ 1 2 3 4 5)").is_ok());
-    }
-
-    #[test]
-    fn test_display_round_trip() {
-        // Test that PrecompiledOp displays in a form that can be parsed again
-        let original = "(+ 1 2 3)";
-        let parsed = parse(original).unwrap();
-        let displayed = format!("{}", parsed);
-
-        // Should be able to parse the displayed form
-        let reparsed = parse(&displayed).unwrap();
-        let redisplayed = format!("{}", reparsed);
-
-        // Should be consistent
-        assert_eq!(displayed, redisplayed);
-
-        // Test nested operations
-        let nested = "(+ (* 2 3) (- 10 5))";
-        let parsed_nested = parse(nested).unwrap();
-        let displayed_nested = format!("{}", parsed_nested);
-        let reparsed_nested = parse(&displayed_nested).unwrap();
-        let redisplayed_nested = format!("{}", reparsed_nested);
-
-        assert_eq!(displayed_nested, redisplayed_nested);
-    }
-
-    #[test]
-    fn test_complex_nested_structures() {
-        // Deeply nested lists
-        assert_eq!(parse("(((1)))").unwrap(), val([val([val([val(1)])])]));
-
-        // Mixed types in nested structure
-        assert_eq!(
-            parse("(foo (\"bar\" #t) -123)").unwrap(),
-            val([sym("foo"), val([val("bar"), val(true)]), val(-123)])
-        );
-    }
-
-    #[test]
-    fn test_parse_time_arity_errors_comprehensive() {
-        let test_cases = vec![
+            // ===== PARSE-TIME ARITY ERRORS =====
             // Special forms with strict arity requirements
-            
+
             // SCHEME-JSONLOGIC-STRICT: Require exactly 3 arguments
             // (Scheme allows 2 args with undefined behavior, JSONLogic allows chaining with >3 args)
             // 'if' requires exactly 3 arguments
-            ("(if #t 1)", SpecificError("ArityError")),        // Too few args
-            ("(if #t 42 0 extra)", SpecificError("ArityError")), // Too many args  
-            ("(if)", SpecificError("ArityError")),             // No args
-            
+            ("(if #t 1)", SpecificError("ArityError")), // Too few args
+            ("(if #t 42 0 extra)", SpecificError("ArityError")), // Too many args
+            ("(if)", SpecificError("ArityError")),      // No args
             // 'and' requires at least 1 argument
-            ("(and)", SpecificError("ArityError")),            // No args
-            
+            ("(and)", SpecificError("ArityError")), // No args
             // 'or' requires at least 1 argument
-            ("(or)", SpecificError("ArityError")),             // No args
-            
+            ("(or)", SpecificError("ArityError")), // No args
             // 'not' requires exactly 1 argument
-            ("(not)", SpecificError("ArityError")),            // No args
-            ("(not #t #f)", SpecificError("ArityError")),      // Too many args
-            
+            ("(not)", SpecificError("ArityError")), // No args
+            ("(not #t #f)", SpecificError("ArityError")), // Too many args
             // 'car' requires exactly 1 argument
-            ("(car)", SpecificError("ArityError")),            // No args
+            ("(car)", SpecificError("ArityError")), // No args
             ("(car (list 1 2) extra)", SpecificError("ArityError")), // Too many args
-            
-            // 'cdr' requires exactly 1 argument  
-            ("(cdr)", SpecificError("ArityError")),            // No args
+            // 'cdr' requires exactly 1 argument
+            ("(cdr)", SpecificError("ArityError")), // No args
             ("(cdr (list 1 2) extra)", SpecificError("ArityError")), // Too many args
-            
-            // Valid cases should still parse successfully
-            ("(if #t 1 2)", Error), // Don't check exact PrecompiledOp structure, just success
-            ("(and #t #f)", Error), // Will be Success, but we'll verify separately
-            ("(or #f #t)", Error),  // Will be Success, but we'll verify separately
-        ];
-
-        // Test error cases
-        let error_cases: Vec<(&str, ParseTestResult)> = test_cases.into_iter()
-            .filter(|(_, result)| matches!(result, SpecificError(_)))
-            .collect();
-        run_parse_tests(error_cases);
-        
-        // Test that valid cases parse successfully (separate verification)
-        assert!(parse("(if #t 1 2)").is_ok());
-        assert!(parse("(and #t #f)").is_ok());
-        assert!(parse("(or #f #t)").is_ok());
-    }
-    
-    #[test]
-    fn test_parse_time_syntax_errors() {
-        let test_cases = vec![
+            // Valid cases with correct arity should parse as PrecompiledOps
+            (
+                "(if #t 1 2)",
+                precompiled_op("if", vec![val(true), val(1), val(2)]),
+            ),
+            (
+                "(and #t #f)",
+                precompiled_op("and", vec![val(true), val(false)]),
+            ),
+            (
+                "(or #f #t)",
+                precompiled_op("or", vec![val(false), val(true)]),
+            ),
+            ("(not #f)", precompiled_op("not", vec![val(false)])),
+            // Test nested arity errors are also caught
+            ("(list (not) 42)", SpecificError("ArityError")),
+            // ===== PARSE-TIME SYNTAX ERRORS =====
             // Unclosed parentheses - should contain parse error information
-            ("(1 2 3", SpecificError("ParseError")),
-            ("((1 2)", SpecificError("ParseError")), 
             ("(+ 1 (- 2", SpecificError("ParseError")),
-            
             // Extra closing parentheses
             ("1 2 3)", SpecificError("ParseError")),
             ("(1 2))", SpecificError("ParseError")),
-            
-            // Invalid starting characters  
+            // Invalid starting characters
             (")", SpecificError("ParseError")),
             ("@invalid", SpecificError("ParseError")),
-            
             // Empty or whitespace-only input
             ("", SpecificError("ParseError")),
             ("   ", SpecificError("ParseError")),
             ("\t\n", SpecificError("ParseError")),
-            
             // Multiple top-level expressions (not supported)
             ("1 2", SpecificError("ParseError")),
             ("(+ 1 2) (+ 3 4)", SpecificError("ParseError")),
             ("42 #t", SpecificError("ParseError")),
-            
             // Valid expressions should parse successfully
-            ("42", success(val(42))),
-            ("\"hello\"", success(val("hello"))),
-            ("#t", success(val(true))),
             ("symbol", success(sym("symbol"))), // Raw symbol, not quoted
         ];
 
