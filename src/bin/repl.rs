@@ -3,7 +3,7 @@ use rustyline::error::ReadlineError;
 use sexpr::ast::Value;
 use sexpr::evaluator;
 use sexpr::jsonlogic::{ast_to_jsonlogic, parse_jsonlogic};
-use sexpr::parser::parse as parse_scheme;
+use sexpr::scheme::parse_scheme;
 
 fn main() {
     println!("Mini Scheme Interpreter v0.1.0 with JSONLogic Support");

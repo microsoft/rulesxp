@@ -39,7 +39,7 @@
 //!
 //! ## Modules
 //!
-//! - `parser`: S-expression parsing from text
+//! - `scheme`: S-expression parsing from text
 //! - `evaluator`: Core expression evaluation engine  
 //! - `builtinops`: Built-in operations with dual-language mapping
 //! - `jsonlogic`: JSONLogic format conversion and integration
@@ -120,4 +120,4 @@ pub mod ast;
 pub mod builtinops;
 pub mod evaluator;
 pub mod jsonlogic;
-pub mod parser;
+pub mod scheme;

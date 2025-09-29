@@ -16,7 +16,7 @@ pub const SYMBOL_SPECIAL_CHARS: &str = "+-*/<>=!?_";
 /// Check if a string is a valid Scheme symbol name
 /// Valid: non-empty, no leading digit, no "-digit" prefix, alphanumeric + SYMBOL_SPECIAL_CHARS
 /// Note: This function is tested as part of the parser tests in parser.rs
-pub fn is_valid_symbol(name: &str) -> bool {
+pub(crate) fn is_valid_symbol(name: &str) -> bool {
     if name.is_empty() {
         return false;
     }
@@ -144,25 +144,25 @@ impl<T: Into<Value> + Clone> From<&[T]> for Value {
 
 ///   Helper function for creating symbols - works great in mixed lists!
 ///   Accepts both &str and String via Into<&str>
-pub fn sym<S: AsRef<str>>(name: S) -> Value {
+pub(crate) fn sym<S: AsRef<str>>(name: S) -> Value {
     Value::Symbol(name.as_ref().to_string())
 }
 
 /// Helper function for creating Values - works great in mixed lists!
 /// Accepts any type that can be converted to Value
-pub fn val<T: Into<Value>>(value: T) -> Value {
+pub(crate) fn val<T: Into<Value>>(value: T) -> Value {
     value.into()
 }
 
 /// Helper function for creating empty lists (nil) - follows Lisp/Scheme conventions
 /// In Lisp, nil represents the empty list
-pub fn nil() -> Value {
+pub(crate) fn nil() -> Value {
     Value::List(vec![])
 }
 
 /// Helper function for creating unspecified values
 /// These are returned by operations like define that have no meaningful return value
-pub fn unspecified() -> Value {
+pub(crate) fn unspecified() -> Value {
     Value::Unspecified
 }
 
@@ -209,7 +209,7 @@ impl std::fmt::Display for Value {
 
 impl Value {
     /// Convert PrecompiledOp back to List form for display purposes
-    pub fn to_uncompiled_form(&self) -> Value {
+    pub(crate) fn to_uncompiled_form(&self) -> Value {
         match self {
             Value::PrecompiledOp { op, args, .. } => {
                 let mut elements = vec![Value::Symbol(op.scheme_id.to_string())];
@@ -232,7 +232,7 @@ impl Value {
     }
 
     /// Check if a value represents nil (empty list)
-    pub fn is_nil(&self) -> bool {
+    pub(crate) fn is_nil(&self) -> bool {
         matches!(self, Value::List(list) if list.is_empty())
     }
 }

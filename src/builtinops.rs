@@ -72,7 +72,7 @@ pub enum Arity {
 
 impl Arity {
     /// Check if the given number of arguments is valid for this arity constraint
-    pub fn validate(&self, arg_count: usize) -> Result<(), SchemeError> {
+    pub(crate) fn validate(&self, arg_count: usize) -> Result<(), SchemeError> {
         let valid = match self {
             Arity::Exact(n) => arg_count == *n,
             Arity::AtLeast(n) => arg_count >= *n,
@@ -151,12 +151,12 @@ impl PartialEq for BuiltinOp {
 
 impl BuiltinOp {
     /// Check if this operation is a special form
-    pub fn is_special_form(&self) -> bool {
+    pub(crate) fn is_special_form(&self) -> bool {
         matches!(self.op_kind, OpKind::SpecialForm(_))
     }
 
     /// Check if the given number of arguments is valid for this operation
-    pub fn validate_arity(&self, arg_count: usize) -> Result<(), SchemeError> {
+    pub(crate) fn validate_arity(&self, arg_count: usize) -> Result<(), SchemeError> {
         self.arity.validate(arg_count)
     }
 }
@@ -198,7 +198,7 @@ numeric_comparison!(builtin_gt, >, ">");
 numeric_comparison!(builtin_le, <=, "<=");
 numeric_comparison!(builtin_ge, >=, ">=");
 
-pub fn builtin_add(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_add(args: &[Value]) -> Result<Value, SchemeError> {
     let mut sum = 0i64;
     for arg in args {
         match arg {
@@ -213,7 +213,7 @@ pub fn builtin_add(args: &[Value]) -> Result<Value, SchemeError> {
     Ok(Value::Number(sum))
 }
 
-pub fn builtin_sub(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_sub(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
         [] => Err(SchemeError::arity_error(1, 0)),
         [Value::Number(first)] => {
@@ -241,7 +241,7 @@ pub fn builtin_sub(args: &[Value]) -> Result<Value, SchemeError> {
     }
 }
 
-pub fn builtin_mul(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_mul(args: &[Value]) -> Result<Value, SchemeError> {
     // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns 1)
     if args.is_empty() {
         return Err(SchemeError::arity_error(1, 0));
@@ -261,7 +261,7 @@ pub fn builtin_mul(args: &[Value]) -> Result<Value, SchemeError> {
     Ok(Value::Number(product))
 }
 
-pub fn builtin_car(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_car(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
         [Value::List(list)] => match list.as_slice() {
             [] => Err(SchemeError::EvalError("car of empty list".to_string())),
@@ -272,7 +272,7 @@ pub fn builtin_car(args: &[Value]) -> Result<Value, SchemeError> {
     }
 }
 
-pub fn builtin_cdr(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_cdr(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
         [Value::List(list)] => match list.as_slice() {
             [] => Err(SchemeError::EvalError("cdr of empty list".to_string())),
@@ -283,7 +283,7 @@ pub fn builtin_cdr(args: &[Value]) -> Result<Value, SchemeError> {
     }
 }
 
-pub fn builtin_cons(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_cons(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
         [first, Value::List(rest)] => {
             let mut new_list = vec![first.clone()];
@@ -298,18 +298,18 @@ pub fn builtin_cons(args: &[Value]) -> Result<Value, SchemeError> {
     }
 }
 
-pub fn builtin_list(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_list(args: &[Value]) -> Result<Value, SchemeError> {
     Ok(Value::List(args.to_vec()))
 }
 
-pub fn builtin_null(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_null(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
         [value] => Ok(Value::Bool(value.is_nil())),
         _ => Err(SchemeError::arity_error(1, args.len())),
     }
 }
 
-pub fn builtin_not(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_not(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
         [Value::Bool(b)] => Ok(Value::Bool(!b)),
         [_] => Err(SchemeError::TypeError(
@@ -319,7 +319,7 @@ pub fn builtin_not(args: &[Value]) -> Result<Value, SchemeError> {
     }
 }
 
-pub fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
         [first, second] => {
             // Scheme's equal? is structural equality for all types
@@ -345,7 +345,7 @@ pub fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
     }
 }
 
-pub fn builtin_error(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_error(args: &[Value]) -> Result<Value, SchemeError> {
     // Convert a value to error message string
     fn value_to_error_string(value: &Value) -> String {
         match value {
@@ -528,27 +528,27 @@ static BUILTIN_JSONLOGIC: LazyLock<HashMap<&'static str, &'static BuiltinOp>> =
     LazyLock::new(|| BUILTIN_OPS.iter().map(|op| (op.jsonlogic_id, op)).collect());
 
 /// Get all builtin operations (for internal use by evaluator)
-pub fn get_builtin_ops() -> &'static [BuiltinOp] {
+pub(crate) fn get_builtin_ops() -> &'static [BuiltinOp] {
     BUILTIN_OPS
 }
 
 /// Find a builtin operation by its Scheme identifier
-pub fn find_scheme_op(id: &str) -> Option<&'static BuiltinOp> {
+pub(crate) fn find_scheme_op(id: &str) -> Option<&'static BuiltinOp> {
     BUILTIN_SCHEME.get(id).copied()
 }
 
 /// Find a builtin operation by its JSONLogic identifier  
-pub fn find_jsonlogic_op(id: &str) -> Option<&'static BuiltinOp> {
+pub(crate) fn find_jsonlogic_op(id: &str) -> Option<&'static BuiltinOp> {
     BUILTIN_JSONLOGIC.get(id).copied()
 }
 
 /// Get the quote builtin operation - guaranteed to exist
-pub fn get_quote_op() -> &'static BuiltinOp {
+pub(crate) fn get_quote_op() -> &'static BuiltinOp {
     find_scheme_op("quote").expect("quote builtin operation must be available")
 }
 
 /// Get the list builtin operation - guaranteed to exist  
-pub fn get_list_op() -> &'static BuiltinOp {
+pub(crate) fn get_list_op() -> &'static BuiltinOp {
     find_scheme_op("list").expect("list builtin operation must be available")
 }
 

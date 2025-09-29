@@ -12,31 +12,31 @@ pub struct Environment {
 }
 
 impl Environment {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Environment {
             bindings: HashMap::new(),
             parent: None,
         }
     }
 
-    pub fn with_parent(parent: Environment) -> Self {
+    pub(crate) fn with_parent(parent: Environment) -> Self {
         Environment {
             bindings: HashMap::new(),
             parent: Some(Box::new(parent)),
         }
     }
 
-    pub fn define(&mut self, name: String, value: Value) {
+    pub(crate) fn define(&mut self, name: String, value: Value) {
         self.bindings.insert(name, value);
     }
 
-    pub fn get(&self, name: &str) -> Option<&Value> {
+    pub(crate) fn get(&self, name: &str) -> Option<&Value> {
         self.bindings
             .get(name)
             .or_else(|| self.parent.as_ref().and_then(|parent| parent.get(name)))
     }
 
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
+    pub(crate) fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
         self.bindings.get_mut(name)
     }
 }
@@ -204,7 +204,7 @@ fn eval_list(
 }
 
 /// Evaluate quote special form
-pub fn eval_quote(
+pub(crate) fn eval_quote(
     args: &[Value],
     _env: &mut Environment,
     _depth: usize,
@@ -216,7 +216,7 @@ pub fn eval_quote(
 }
 
 /// Evaluate define special form
-pub fn eval_define(
+pub(crate) fn eval_define(
     args: &[Value],
     env: &mut Environment,
     depth: usize,
@@ -235,7 +235,11 @@ pub fn eval_define(
 }
 
 /// Evaluate if special form
-pub fn eval_if(args: &[Value], env: &mut Environment, depth: usize) -> Result<Value, SchemeError> {
+pub(crate) fn eval_if(
+    args: &[Value],
+    env: &mut Environment,
+    depth: usize,
+) -> Result<Value, SchemeError> {
     match args {
         [condition_expr, then_expr, else_expr] => {
             let condition = eval_with_depth_tracking(condition_expr, env, depth + 1)?;
@@ -252,7 +256,7 @@ pub fn eval_if(args: &[Value], env: &mut Environment, depth: usize) -> Result<Va
 }
 
 /// Evaluate lambda special form
-pub fn eval_lambda(
+pub(crate) fn eval_lambda(
     args: &[Value],
     env: &mut Environment,
     _depth: usize,
@@ -312,7 +316,11 @@ fn is_obviously_non_boolean(value: &Value) -> bool {
 }
 
 /// Evaluate and special form (strict boolean evaluation)
-pub fn eval_and(args: &[Value], env: &mut Environment, depth: usize) -> Result<Value, SchemeError> {
+pub(crate) fn eval_and(
+    args: &[Value],
+    env: &mut Environment,
+    depth: usize,
+) -> Result<Value, SchemeError> {
     // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
     if args.is_empty() {
         return Err(SchemeError::arity_error(1, 0));
@@ -349,7 +357,11 @@ pub fn eval_and(args: &[Value], env: &mut Environment, depth: usize) -> Result<V
 }
 
 /// Evaluate or special form (strict boolean evaluation)
-pub fn eval_or(args: &[Value], env: &mut Environment, depth: usize) -> Result<Value, SchemeError> {
+pub(crate) fn eval_or(
+    args: &[Value],
+    env: &mut Environment,
+    depth: usize,
+) -> Result<Value, SchemeError> {
     // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #f)
     if args.is_empty() {
         return Err(SchemeError::arity_error(1, 0));
@@ -410,7 +422,7 @@ pub fn create_global_env() -> Environment {
 mod tests {
     use super::*;
     use crate::ast::{nil, sym, val};
-    use crate::parser::parse;
+    use crate::scheme::parse_scheme;
 
     /// Test result variants for comprehensive testing
     #[derive(Debug)]
@@ -451,7 +463,7 @@ mod tests {
 
     /// Execute a single test case with detailed error reporting
     fn execute_test_case(input: &str, expected: &TestResult, env: &mut Environment, test_id: &str) {
-        let expr = match parse(input) {
+        let expr = match parse_scheme(input) {
             Ok(expr) => expr,
             Err(parse_err) => {
                 panic!(
@@ -661,7 +673,7 @@ mod tests {
             ("(if \"hello\" 1 2)", Error),
             ("(if '() 1 2)", Error), // nil as condition should error
             ("(if #f 42 '())", success(nil())), // if returning nil is valid
-            // Note: Arity errors are now caught at parse time - see parser.rs tests
+            // Note: Arity errors are now caught at parse time - see scheme.rs tests
             // === BOOLEAN LOGIC OPERATIONS ===
             // and operator - SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
             ("(and #t)", success(true)),
@@ -672,7 +684,7 @@ mod tests {
             ("(and #t #t #t)", success(true)),
             ("(and #t #t #f)", success(false)),
             // and errors - SCHEME-JSONLOGIC-STRICT: and requires boolean arguments
-            // Note: Arity errors are now caught at parse time - see parser.rs tests
+            // Note: Arity errors are now caught at parse time - see scheme.rs tests
             ("(and 1 2 3)", Error),  // rejects non-booleans
             ("(and 1 #f 3)", Error), // rejects non-booleans
             // or operator - SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #f)
@@ -684,7 +696,7 @@ mod tests {
             ("(or #f #f #t)", success(true)),
             ("(or #f #f #f)", success(false)),
             // or errors - SCHEME-JSONLOGIC-STRICT: or requires boolean arguments
-            // Note: Arity errors are now caught at parse time - see parser.rs tests
+            // Note: Arity errors are now caught at parse time - see scheme.rs tests
             ("(or #f 2 3)", Error), // rejects non-booleans
             ("(or 1 2 3)", Error),  // rejects non-booleans
             // not operator (requires exactly 1 boolean argument)
@@ -987,8 +999,8 @@ mod tests {
     #[test]
     fn test_builtin_function_self_evaluation() {
         let mut env = create_global_env();
-        eval(&parse("(define f +)").unwrap(), &mut env).unwrap();
-        let result = eval(&parse("f").unwrap(), &mut env).unwrap();
+        eval(&parse_scheme("(define f +)").unwrap(), &mut env).unwrap();
+        let result = eval(&parse_scheme("f").unwrap(), &mut env).unwrap();
         match result {
             Value::BuiltinFunction { .. } => {} // Self-evaluating
             _ => panic!("Expected BuiltinFunction to be self-evaluating"),

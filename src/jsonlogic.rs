@@ -363,7 +363,7 @@ mod tests {
 
     use super::*;
     use crate::evaluator::{create_global_env, eval};
-    use crate::parser::parse as parse_scheme;
+    use crate::scheme::parse_scheme;
 
     #[derive(Debug)]
     enum TestResult {

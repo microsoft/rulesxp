@@ -26,7 +26,7 @@ fn create_quote_precompiled_op(content: &Value) -> Value {
 
 /// Control whether builtin operations should be precompiled during parsing
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ShouldPrecompileOps {
+enum ShouldPrecompileOps {
     Yes,
     No,
 }
@@ -285,7 +285,7 @@ fn parse_quote(
 }
 
 /// Parse a complete S-expression from input with optimization enabled
-pub fn parse(input: &str) -> Result<Value, SchemeError> {
+pub fn parse_scheme(input: &str) -> Result<Value, SchemeError> {
     match terminated(
         |input| parse_sexpr(input, ShouldPrecompileOps::Yes, 0),
         multispace0,
@@ -369,7 +369,7 @@ mod tests {
     fn run_parse_tests(test_cases: Vec<(&str, ParseTestResult)>) {
         for (i, (input, expected)) in test_cases.iter().enumerate() {
             let test_id = format!("Parse test #{}", i + 1);
-            let result = parse(input);
+            let result = parse_scheme(input);
 
             match (result, expected) {
                 // Success cases with round-trip testing
@@ -378,7 +378,7 @@ mod tests {
 
                     // Test round-trip: display -> parse -> display should be identical
                     let displayed = format!("{}", actual);
-                    let reparsed = parse(&displayed).unwrap_or_else(|e| {
+                    let reparsed = parse_scheme(&displayed).unwrap_or_else(|e| {
                         panic!(
                             "{}: round-trip parse failed for '{}': {:?}",
                             test_id, displayed, e
@@ -394,16 +394,12 @@ mod tests {
 
                 (Ok(actual), SuccessPrecompiledOp(expected_scheme_id, expected_args)) => {
                     if let Value::PrecompiledOp { op_id, args, .. } = &actual {
-                        assert_eq!(
-                            op_id, *expected_scheme_id,
-                            "{}: scheme_id mismatch",
-                            test_id
-                        );
+                        assert_eq!(op_id, expected_scheme_id, "{}: scheme_id mismatch", test_id);
                         assert_eq!(args, expected_args, "{}: args mismatch", test_id);
 
                         // Test round-trip for PrecompiledOp
                         let displayed = format!("{}", actual);
-                        let reparsed = parse(&displayed).unwrap_or_else(|e| {
+                        let reparsed = parse_scheme(&displayed).unwrap_or_else(|e| {
                             panic!(
                                 "{}: round-trip parse failed for '{}': {:?}",
                                 test_id, displayed, e
@@ -432,7 +428,7 @@ mod tests {
 
                     // Test round-trip for SemanticallyEquivalent
                     let displayed = format!("{}", actual);
-                    let reparsed = parse(&displayed).unwrap_or_else(|e| {
+                    let reparsed = parse_scheme(&displayed).unwrap_or_else(|e| {
                         panic!(
                             "{}: round-trip parse failed for '{}': {:?}",
                             test_id, displayed, e
@@ -771,11 +767,11 @@ mod tests {
 
         // Verify that expressions just under the limit parse successfully
         assert!(
-            parse(&parens_under_limit).is_ok(),
+            parse_scheme(&parens_under_limit).is_ok(),
             "Parens just under depth limit should parse successfully"
         );
         assert!(
-            parse(&quotes_under_limit).is_ok(),
+            parse_scheme(&quotes_under_limit).is_ok(),
             "Quotes just under depth limit should parse successfully"
         );
     }
