@@ -10,6 +10,37 @@
 use crate::SchemeError;
 use crate::builtinops::BuiltinOp;
 
+/// Allowed non-alphanumeric characters in Scheme symbol names
+pub const SYMBOL_SPECIAL_CHARS: &str = "+-*/<>=!?_";
+
+/// Check if a string is a valid Scheme symbol name
+/// Valid: non-empty, no leading digit, no "-digit" prefix, alphanumeric + SYMBOL_SPECIAL_CHARS
+/// Note: This function is tested as part of the parser tests in parser.rs
+pub fn is_valid_symbol(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+
+    let mut chars = name.chars();
+    let first_char = chars.next().unwrap();
+
+    // Check first character restrictions
+    if first_char.is_ascii_digit() {
+        return false;
+    }
+
+    if first_char == '-'
+        && let Some(second_char) = chars.next()
+        && second_char.is_ascii_digit()
+    {
+        return false;
+    }
+
+    // Check all characters are valid
+    name.chars()
+        .all(|c| c.is_alphanumeric() || SYMBOL_SPECIAL_CHARS.contains(c))
+}
+
 /// Core AST type in our Scheme interpreter
 ///
 /// Note: PrecompiledOps (optimized s-expressions) don't equality-compare to dynamically

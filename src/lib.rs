@@ -46,6 +46,15 @@
 
 use std::fmt;
 
+/// Maximum parsing depth to prevent stack overflow attacks
+/// This limits deeply nested structures in both S-expression and JSONLogic parsers
+pub const MAX_PARSE_DEPTH: usize = 32;
+
+/// Maximum evaluation depth to prevent stack overflow in recursive evaluation
+/// This limits deeply nested function calls and expressions during evaluation
+/// Set higher than parse depth to allow for nested function applications
+pub const MAX_EVAL_DEPTH: usize = 64;
+
 /// Error types for the interpreter
 #[derive(Debug, Clone, PartialEq)]
 pub enum SchemeError {

@@ -1,3 +1,4 @@
+use crate::MAX_EVAL_DEPTH;
 use crate::SchemeError;
 use crate::ast::Value;
 use crate::builtinops::get_builtin_ops;
@@ -40,8 +41,23 @@ impl Environment {
     }
 }
 
-/// Evaluate an S-expression in the given environment
+/// Evaluate an S-expression (public API)
 pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
+    eval_with_depth_tracking(expr, env, 0)
+}
+
+/// Evaluate an S-expression with depth tracking to prevent stack overflow
+fn eval_with_depth_tracking(
+    expr: &Value,
+    env: &mut Environment,
+    depth: usize,
+) -> Result<Value, SchemeError> {
+    if depth >= MAX_EVAL_DEPTH {
+        return Err(SchemeError::EvalError(format!(
+            "Evaluation depth limit exceeded (max: {})",
+            MAX_EVAL_DEPTH
+        )));
+    }
     match expr {
         // Self-evaluating forms (empty lists are NOT self-evaluating for strict semantics)
         Value::Number(_)
@@ -65,8 +81,8 @@ pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
             use crate::builtinops::OpKind;
             match &op.op_kind {
                 OpKind::Function(f) => {
-                    // Evaluate all arguments using helper function
-                    let evaluated_args = eval_args(args, env)?;
+                    // Evaluate all arguments using helper function with depth tracking
+                    let evaluated_args = eval_args(args, env, depth)?;
                     // Apply the function (arity already validated at parse time)
                     f(&evaluated_args)
                 }
@@ -74,13 +90,16 @@ pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
                     // Special forms are syntax structures handled here after being converted
                     // to PrecompiledOps during parsing. They get unevaluated arguments.
                     // (arity already validated at parse time)
-                    special_form(args, env)
+                    // Note: Special forms handle their own depth tracking via eval_with_depth_tracking calls
+                    special_form(args, env, depth)
                 }
             }
         }
 
         // List evaluation (function application or special forms)
-        Value::List(elements) => eval_list(elements, env).map_err(|err| add_context(err, expr)),
+        Value::List(elements) => {
+            eval_list(elements, env, depth).map_err(|err| add_context(err, expr))
+        }
     }
 }
 
@@ -99,9 +118,15 @@ fn add_context(error: SchemeError, expr: &Value) -> SchemeError {
     }
 }
 
-/// Helper function to evaluate a list of argument expressions
-fn eval_args(args: &[Value], env: &mut Environment) -> Result<Vec<Value>, SchemeError> {
-    args.iter().map(|arg| eval(arg, env)).collect()
+/// Helper function to evaluate a list of argument expressions with depth tracking
+fn eval_args(
+    args: &[Value],
+    env: &mut Environment,
+    depth: usize,
+) -> Result<Vec<Value>, SchemeError> {
+    args.iter()
+        .map(|arg| eval_with_depth_tracking(arg, env, depth + 1))
+        .collect()
 }
 
 /// Evaluate a list expression (function application)
@@ -115,7 +140,11 @@ fn eval_args(args: &[Value], env: &mut Environment) -> Result<Vec<Value>, Scheme
 /// If the PrecompiledOps optimization were removed, special forms would need
 /// special handling here. Builtin functions are added to the environment and
 /// can be called dynamically through normal symbol lookup and function application.
-fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+fn eval_list(
+    elements: &[Value],
+    env: &mut Environment,
+    depth: usize,
+) -> Result<Value, SchemeError> {
     // Note: Dynamic calls (not PrecompiledOps) still need runtime arity checking
     match elements {
         [] => Err(SchemeError::EvalError(
@@ -126,11 +155,11 @@ fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeE
         // Note: If PrecompiledOps optimization were removed, we would need to check for
         // special forms here before function application (builtin functions work via symbol lookup)
         [func_expr, arg_exprs @ ..] => {
-            // Evaluate the function
-            let func = eval(func_expr, env)?;
+            // Evaluate the function with depth tracking
+            let func = eval_with_depth_tracking(func_expr, env, depth + 1)?;
 
-            // Evaluate the arguments
-            let args = eval_args(arg_exprs, env)?;
+            // Evaluate the arguments with depth tracking
+            let args = eval_args(arg_exprs, env, depth + 1)?;
 
             // Apply the function
             match &func {
@@ -153,8 +182,9 @@ fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeE
                         new_env.define(param.clone(), arg.clone());
                     }
 
-                    // Evaluate body with context
-                    eval(body, &mut new_env).map_err(|err| match err {
+                    // Evaluate body with depth tracking and context
+                    eval_with_depth_tracking(body, &mut new_env, depth + 1).map_err(|err| match err
+                    {
                         SchemeError::EvalError(msg) => {
                             SchemeError::EvalError(format!("{}\n  In lambda: {}", msg, body))
                         }
@@ -174,7 +204,11 @@ fn eval_list(elements: &[Value], env: &mut Environment) -> Result<Value, SchemeE
 }
 
 /// Evaluate quote special form
-pub fn eval_quote(args: &[Value], _env: &mut Environment) -> Result<Value, SchemeError> {
+pub fn eval_quote(
+    args: &[Value],
+    _env: &mut Environment,
+    _depth: usize,
+) -> Result<Value, SchemeError> {
     match args {
         [expr] => Ok(expr.clone()), // Quote content is already unoptimized during parsing
         _ => Err(SchemeError::arity_error(1, args.len())),
@@ -182,10 +216,14 @@ pub fn eval_quote(args: &[Value], _env: &mut Environment) -> Result<Value, Schem
 }
 
 /// Evaluate define special form
-pub fn eval_define(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+pub fn eval_define(
+    args: &[Value],
+    env: &mut Environment,
+    depth: usize,
+) -> Result<Value, SchemeError> {
     match args {
         [Value::Symbol(name), expr] => {
-            let value = eval(expr, env)?;
+            let value = eval_with_depth_tracking(expr, env, depth + 1)?;
             env.define(name.clone(), value.clone());
             Ok(Value::Unspecified)
         }
@@ -197,13 +235,13 @@ pub fn eval_define(args: &[Value], env: &mut Environment) -> Result<Value, Schem
 }
 
 /// Evaluate if special form
-pub fn eval_if(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+pub fn eval_if(args: &[Value], env: &mut Environment, depth: usize) -> Result<Value, SchemeError> {
     match args {
         [condition_expr, then_expr, else_expr] => {
-            let condition = eval(condition_expr, env)?;
+            let condition = eval_with_depth_tracking(condition_expr, env, depth + 1)?;
             match condition {
-                Value::Bool(true) => eval(then_expr, env),
-                Value::Bool(false) => eval(else_expr, env),
+                Value::Bool(true) => eval_with_depth_tracking(then_expr, env, depth + 1),
+                Value::Bool(false) => eval_with_depth_tracking(else_expr, env, depth + 1),
                 _ => Err(SchemeError::TypeError(
                     "SCHEME-JSONLOGIC-STRICT: if condition must be a boolean".to_string(),
                 )),
@@ -214,7 +252,11 @@ pub fn eval_if(args: &[Value], env: &mut Environment) -> Result<Value, SchemeErr
 }
 
 /// Evaluate lambda special form
-pub fn eval_lambda(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+pub fn eval_lambda(
+    args: &[Value],
+    env: &mut Environment,
+    _depth: usize,
+) -> Result<Value, SchemeError> {
     match args {
         [Value::List(param_list), body] => {
             let mut params = Vec::new();
@@ -270,7 +312,7 @@ fn is_obviously_non_boolean(value: &Value) -> bool {
 }
 
 /// Evaluate and special form (strict boolean evaluation)
-pub fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+pub fn eval_and(args: &[Value], env: &mut Environment, depth: usize) -> Result<Value, SchemeError> {
     // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
     if args.is_empty() {
         return Err(SchemeError::arity_error(1, 0));
@@ -288,7 +330,7 @@ pub fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeEr
 
     // Second pass: evaluate each argument and require it to be a boolean
     for arg in args.iter() {
-        let result = eval(arg, env)?;
+        let result = eval_with_depth_tracking(arg, env, depth + 1)?;
 
         match result {
             Value::Bool(false) => return Ok(Value::Bool(false)),
@@ -307,7 +349,7 @@ pub fn eval_and(args: &[Value], env: &mut Environment) -> Result<Value, SchemeEr
 }
 
 /// Evaluate or special form (strict boolean evaluation)
-pub fn eval_or(args: &[Value], env: &mut Environment) -> Result<Value, SchemeError> {
+pub fn eval_or(args: &[Value], env: &mut Environment, depth: usize) -> Result<Value, SchemeError> {
     // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #f)
     if args.is_empty() {
         return Err(SchemeError::arity_error(1, 0));
@@ -325,7 +367,7 @@ pub fn eval_or(args: &[Value], env: &mut Environment) -> Result<Value, SchemeErr
 
     // Second pass: evaluate each argument and require it to be a boolean
     for arg in args {
-        let result = eval(arg, env)?;
+        let result = eval_with_depth_tracking(arg, env, depth + 1)?;
 
         match result {
             Value::Bool(true) => return Ok(Value::Bool(true)),
@@ -955,24 +997,110 @@ mod tests {
 
     #[test]
     fn test_recursive_functions() {
-        // Note: True recursive functions in Scheme require letrec semantics
-        // For now, this test shows the limitation of our simple implementation
-        // In a full Scheme implementation, functions should be able to reference themselves
+        // This test demonstrates the current limitation: recursive functions fail
+        // because the function name is not yet bound when the lambda body is created.
+        // In a full Scheme implementation with letrec semantics, these should work.
 
-        // This test is commented out because our current implementation
-        // doesn't support true recursive function definitions
-        // TODO: Implement letrec or improve define to support recursion
+        let recursive_test_cases = vec![
+            // === SINGLE RECURSIVE FUNCTIONS (Currently Failing) ===
+            TestEnvironment(vec![
+                // Simple factorial function - should fail because 'factorial' is unbound in lambda body
+                test_setup!(
+                    "(define factorial (lambda (n) (if (= n 0) 1 (* n (factorial (- n 1))))))"
+                ),
+                (
+                    "(factorial 5)",
+                    SpecificError("Unbound variable: factorial"),
+                ), // Current limitation
+            ]),
+            // === MUTUALLY RECURSIVE FUNCTIONS (Currently Failing) ===
+            TestEnvironment(vec![
+                // Even/odd mutual recursion - fails because functions can't see each other during definition
+                test_setup!("(define is-even (lambda (n) (if (= n 0) #t (is-odd (- n 1)))))"),
+                test_setup!("(define is-odd (lambda (n) (if (= n 0) #f (is-even (- n 1)))))"),
+                ("(is-even 4)", SpecificError("Unbound variable: is-odd")), // is-even tries to call is-odd but it's not visible
+                ("(is-odd 3)", SpecificError("Unbound variable: is-odd")), // is-odd -> is-even -> is-odd, but is-odd not visible in is-even
+            ]),
+            // === EDGE CASES FOR RECURSION ===
+            TestEnvironment(vec![
+                // Self-referencing lambda in complex expression
+                test_setup!(
+                    "(define countdown (lambda (n) (if (<= n 0) (list) (cons n (countdown (- n 1))))))"
+                ),
+                (
+                    "(countdown 3)",
+                    SpecificError("Unbound variable: countdown"),
+                ), // Current limitation
+            ]),
+            TestEnvironment(vec![
+                // Indirect self-reference through higher-order function
+                test_setup!("(define apply-self (lambda (f x) (f x)))"),
+                test_setup!(
+                    "(define factorial-indirect (lambda (n) (if (= n 0) 1 (* n (apply-self factorial-indirect (- n 1))))))"
+                ),
+                (
+                    "(factorial-indirect 3)",
+                    SpecificError("Unbound variable: factorial-indirect"),
+                ), // Current limitation
+            ]),
+            // === EDGE CASES THAT ACTUALLY WORK (Recursion Workarounds) ===
+            TestEnvironment(vec![
+                // Self-application trick (Y combinator style) - this actually works!
+                test_setup!("(define self-apply (lambda (f x) (f f x)))"),
+                test_setup!(
+                    "(define factorial-trick (lambda (self n) (if (= n 0) 1 (* n (self self (- n 1))))))"
+                ),
+                ("(self-apply factorial-trick 5)", success(120)), // Works by passing function to itself
+            ]),
+            TestEnvironment(vec![
+                // Higher-order function recursion maker - this also works!
+                test_setup!("(define make-recursive (lambda (f) (lambda (x) ((f f) x))))"),
+                test_setup!(
+                    "(define fib-maker (lambda (self) (lambda (n) (if (< n 2) n (+ ((self self) (- n 1)) ((self self) (- n 2)))))))"
+                ),
+                test_setup!("(define fib (make-recursive fib-maker))"),
+                ("(fib 6)", success(8)), // Fibonacci works through self-application
+            ]),
+            TestEnvironment(vec![
+                // Countdown using self-application - redefine helper for this environment
+                test_setup!("(define make-recursive (lambda (f) (lambda (x) ((f f) x))))"),
+                test_setup!(
+                    "(define countdown-maker (lambda (self) (lambda (n) (if (<= n 0) (list) (cons n ((self self) (- n 1)))))))"
+                ),
+                test_setup!("(define countdown (make-recursive countdown-maker))"),
+                ("(countdown 3)", success([3, 2, 1])), // Recursive list building works
+            ]),
+            TestEnvironment(vec![
+                // Mutual recursion simulation - alternating even/odd through single recursive function
+                test_setup!(
+                    "(define parity-maker (lambda (self) (lambda (n is-even) (if (= n 0) is-even ((self self) (- n 1) (not is-even))))))"
+                ),
+                test_setup!("(define check-parity (parity-maker parity-maker))"),
+                ("(check-parity 4 #t)", success(true)), // 4 is even
+                ("(check-parity 3 #t)", success(false)), // 3 is not even
+                ("(check-parity 3 #f)", success(true)), // 3 is odd
+            ]),
+        ];
 
-        /*
-        let mut env = create_global_env();
+        // Run all the recursive function tests that demonstrate current limitations
+        // and successful workarounds
+        run_tests_in_environment(recursive_test_cases);
+    }
 
-        // Define factorial function
-        eval_string_with_env("(define factorial (lambda (n) (if (= n 0) 1 (* n (factorial (- n 1))))))", &mut env).unwrap();
-        assert_eq!(eval_string_with_env("(factorial 5)", &mut env).unwrap(), val(120));
+    #[test]
+    fn test_evaluation_depth_limit() {
+        let depth_test_environments = vec![TestEnvironment(vec![
+            // Define the deep recursion helper function
+            test_setup!(
+                "(define make-deep (lambda (self depth) (if (= depth 0) 42 (+ 1 (self self (- depth 1))))))"
+            ),
+            // Test that shallow depth works
+            ("(make-deep make-deep 10)", success(52)), // 42 + 10
+            // Test that deep evaluation is caught - use a value that should exceed MAX_EVAL_DEPTH
+            // Each recursive call increases depth through function calls and if statements
+            ("(make-deep make-deep 1000)", SpecificError("depth")),
+        ])];
 
-        // Define fibonacci function
-        eval_string_with_env("(define fib (lambda (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))", &mut env).unwrap();
-        assert_eq!(eval_string_with_env("(fib 6)", &mut env).unwrap(), val(8));
-        */
+        run_tests_in_environment(depth_test_environments);
     }
 }

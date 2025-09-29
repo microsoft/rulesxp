@@ -1,5 +1,6 @@
+use crate::MAX_PARSE_DEPTH;
 use crate::SchemeError;
-use crate::ast::Value;
+use crate::ast::{Value, is_valid_symbol};
 use crate::builtinops::{
     Arity, BuiltinOp, find_jsonlogic_op, find_scheme_op, get_list_op, get_quote_op,
 };
@@ -26,13 +27,20 @@ pub fn parse_jsonlogic(input: &str) -> Result<Value, SchemeError> {
 
 /// Compile a serde_json::Value to AST value
 fn compile_json_to_ast(json: serde_json::Value) -> Result<Value, SchemeError> {
-    compile_json_to_ast_with_context(json, CompilationContext::Normal)
+    compile_json_to_ast_with_context(json, CompilationContext::Normal, 0)
 }
 
 fn compile_json_to_ast_with_context(
     json: serde_json::Value,
     context: CompilationContext,
+    depth: usize,
 ) -> Result<Value, SchemeError> {
+    if depth >= MAX_PARSE_DEPTH {
+        return Err(SchemeError::ParseError(format!(
+            "JSONLogic expression too deeply nested (max depth: {})",
+            MAX_PARSE_DEPTH
+        )));
+    }
     match json {
         // Primitives
         serde_json::Value::Null => Err(SchemeError::ParseError(
@@ -59,7 +67,7 @@ fn compile_json_to_ast_with_context(
 
             let converted: Vec<Value> = arr
                 .into_iter()
-                .map(|v| compile_json_to_ast_with_context(v, element_context))
+                .map(|v| compile_json_to_ast_with_context(v, element_context, depth + 1))
                 .collect::<Result<Vec<_>, _>>()?;
 
             match context {
@@ -95,11 +103,11 @@ fn compile_json_to_ast_with_context(
                     if operator == "var" {
                         // {"var": "symbol"} becomes a symbol in quote context
                         match operands {
-                            serde_json::Value::String(var_name) if !var_name.is_empty() => {
+                            serde_json::Value::String(var_name) if is_valid_symbol(&var_name) => {
                                 Ok(Value::Symbol(var_name))
                             }
                             _ => Err(SchemeError::ParseError(
-                                "Variable must be nonempty string".to_string(),
+                                "Variable must be a valid symbol string".to_string(),
                             )),
                         }
                     } else {
@@ -112,7 +120,7 @@ fn compile_json_to_ast_with_context(
                 }
                 CompilationContext::Normal | CompilationContext::ArrayElement => {
                     // Normal compilation context - compile as operation
-                    compile_jsonlogic_operation(&operator, operands)
+                    compile_jsonlogic_operation(&operator, operands, depth)
                 }
             }
         }
@@ -123,6 +131,7 @@ fn compile_json_to_ast_with_context(
 fn compile_jsonlogic_operation(
     operator: &str,
     operands: serde_json::Value,
+    depth: usize,
 ) -> Result<Value, SchemeError> {
     // Helper function to extract operands as a list, ignoring arity checks
     let extract_operand_list = |operands: serde_json::Value| -> Result<Vec<Value>, SchemeError> {
@@ -138,7 +147,7 @@ fn compile_jsonlogic_operation(
                         } else {
                             CompilationContext::Normal
                         };
-                        compile_json_to_ast_with_context(v, context)
+                        compile_json_to_ast_with_context(v, context, depth + 1)
                     })
                     .collect::<Result<Vec<_>, _>>()
             }
@@ -149,7 +158,11 @@ fn compile_jsonlogic_operation(
                 } else {
                     CompilationContext::Normal
                 };
-                Ok(vec![compile_json_to_ast_with_context(single, context)?])
+                Ok(vec![compile_json_to_ast_with_context(
+                    single,
+                    context,
+                    depth + 1,
+                )?])
             }
         }
     };
@@ -180,8 +193,12 @@ fn compile_jsonlogic_operation(
 
         // Variable access (JSONLogic specific)
         "var" => match operands {
-            serde_json::Value::String(var_name) => Ok(Value::Symbol(var_name)),
-            _ => Err(SchemeError::ParseError("var requires string".to_string())),
+            serde_json::Value::String(var_name) if is_valid_symbol(&var_name) => {
+                Ok(Value::Symbol(var_name))
+            }
+            _ => Err(SchemeError::ParseError(
+                "Variable must be a valid symbol string".to_string(),
+            )),
         },
 
         // Quote special form - CRITICAL: preserve quoted content as literal data
@@ -201,7 +218,8 @@ fn compile_jsonlogic_operation(
 
             // Convert the operand to literal data WITHOUT compilation/evaluation
             // This preserves the quoted content as pure data
-            let quoted_data = compile_json_to_ast_with_context(operand, CompilationContext::Quote)?;
+            let quoted_data =
+                compile_json_to_ast_with_context(operand, CompilationContext::Quote, depth + 1)?;
 
             // Create a PrecompiledOp wrapper to preserve quote information for roundtrip
             // This allows us to distinguish quoted data from regular list data
@@ -233,6 +251,13 @@ fn compile_jsonlogic_operation(
                     )))
                 } else {
                     // Operation not in registry and not a Scheme builtin - emit as regular list for custom operations
+                    // But first validate that the operator name is a valid symbol
+                    if !is_valid_symbol(operator) {
+                        return Err(SchemeError::ParseError(format!(
+                            "Invalid operator name: '{}'",
+                            operator
+                        )));
+                    }
                     let args = extract_operand_list(operands)?;
                     let mut result = vec![Value::Symbol(operator.to_string())];
                     result.extend(args);
@@ -353,8 +378,7 @@ mod tests {
     #[test]
     fn test_jsonlogic_to_scheme_equivalence() {
         // Test cases as tuples: (jsonlogic, scheme_equivalent)
-        // None for scheme_equivalent means we expect an error
-        let test_cases = [
+        let test_cases = vec![
             // Basic primitives
             ("true", Identical("#t")),
             ("false", Identical("#f")),
@@ -450,7 +474,16 @@ mod tests {
             // Empty string variable names should be rejected
             (
                 r#"{"scheme-quote": [{"var": ""}]}"#,
-                SpecificError("nonempty string"),
+                SpecificError("Variable must be a valid symbol string"),
+            ),
+            // Invalid operator names should be rejected
+            (
+                r#"{"invalid op": [1, 2]}"#,
+                SpecificError("Invalid operator name"),
+            ),
+            (
+                r#"{"123invalid": [1, 2]}"#,
+                SpecificError("Invalid operator name"),
             ),
             // Design validation tests - operations intentionally rejected/different
             (
@@ -644,6 +677,61 @@ mod tests {
         ];
 
         run_data_driven_tests(&test_cases);
+    }
+
+    #[test]
+    fn test_jsonlogic_depth_limits() {
+        // Create depth limit test strings
+        let arrays_under_limit = format!(
+            "{}{}{}",
+            "[".repeat(MAX_PARSE_DEPTH - 1),
+            r#"{"var": "unbound"}"#,
+            "]".repeat(MAX_PARSE_DEPTH - 1)
+        );
+        let objects_under_limit = format!(
+            "{}{}{}",
+            r#"{"op": "#.repeat(MAX_PARSE_DEPTH - 1),
+            r#"{"var": "unbound"}"#,
+            "}".repeat(MAX_PARSE_DEPTH - 1)
+        );
+        let deep_arrays_at_limit = format!(
+            "{}{}{}",
+            "[".repeat(MAX_PARSE_DEPTH),
+            "1",
+            "]".repeat(MAX_PARSE_DEPTH)
+        );
+        let deep_objects_at_limit = format!(
+            "{}{}{}",
+            r#"{"op": "#.repeat(MAX_PARSE_DEPTH),
+            r#"{"end": 1}"#,
+            "}".repeat(MAX_PARSE_DEPTH)
+        );
+
+        let depth_test_cases = vec![
+            // At/over limit should fail with specific depth error
+            (
+                deep_arrays_at_limit.as_str(),
+                SpecificError("too deeply nested"),
+            ),
+            (
+                deep_objects_at_limit.as_str(),
+                SpecificError("too deeply nested"),
+            ),
+        ];
+
+        run_data_driven_tests(&depth_test_cases);
+
+        // Test that under-limit cases parse successfully (separate verification)
+        let arrays_result = parse_jsonlogic(&arrays_under_limit);
+        let objects_result = parse_jsonlogic(&objects_under_limit);
+        assert!(
+            arrays_result.is_ok(),
+            "Arrays just under depth limit should parse successfully"
+        );
+        assert!(
+            objects_result.is_ok(),
+            "Objects just under depth limit should parse successfully"
+        );
     }
 
     /// Helper function to test AST equivalence and roundtrip (shared by Identical and IdenticalWithEvalError)

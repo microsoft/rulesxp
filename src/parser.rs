@@ -3,14 +3,15 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, take_while1},
     character::complete::{char, multispace0, multispace1},
-    combinator::{map, opt, recognize, value},
+    combinator::{opt, recognize, value},
     error::{Error, ErrorKind},
     multi::separated_list0,
     sequence::{pair, preceded, terminated},
 };
 
+use crate::MAX_PARSE_DEPTH;
 use crate::SchemeError;
-use crate::ast::Value;
+use crate::ast::{SYMBOL_SPECIAL_CHARS, Value, is_valid_symbol};
 use crate::builtinops::{find_scheme_op, get_quote_op};
 
 /// Helper function to create a quote PrecompiledOp
@@ -38,6 +39,10 @@ fn parse_error_to_message(input: &str, error: nom::Err<Error<&str>>) -> String {
             match e.code {
                 ErrorKind::Char => format!("Expected character at position {}", position),
                 ErrorKind::Tag => format!("Unexpected token at position {}", position),
+                ErrorKind::TooLarge => format!(
+                    "Expression too deeply nested (max depth: {})",
+                    MAX_PARSE_DEPTH
+                ),
                 _ => {
                     if position < input.len() {
                         let remaining_chars: String =
@@ -103,22 +108,19 @@ fn parse_bool(input: &str) -> IResult<&str, Value> {
 
 /// Parse a symbol (identifier)
 fn parse_symbol(input: &str) -> IResult<&str, Value> {
-    // Don't parse symbols that start with digits or look like numbers
-    if let Some(first_char) = input.chars().next() {
-        if first_char.is_ascii_digit()
-            || (first_char == '-' && input.chars().nth(1).map_or(false, |c| c.is_ascii_digit()))
-        {
-            return Err(nom::Err::Error(nom::error::Error::new(
-                input,
-                nom::error::ErrorKind::Alpha,
-            )));
-        }
-    }
+    let symbol_chars =
+        take_while1(|c: char| c.is_alphanumeric() || SYMBOL_SPECIAL_CHARS.contains(c));
 
-    map(
-        take_while1(|c: char| c.is_alphanumeric() || "+-*/<>=!?_".contains(c)),
-        |s: &str| Value::Symbol(s.to_string()),
-    )(input)
+    let (remaining, candidate) = symbol_chars(input)?;
+
+    if is_valid_symbol(candidate) {
+        Ok((remaining, Value::Symbol(candidate.to_string())))
+    } else {
+        Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Alpha,
+        )))
+    }
 }
 
 /// Parse a string literal
@@ -174,7 +176,11 @@ fn parse_string(input: &str) -> IResult<&str, Value> {
 }
 
 /// Parse a list with configurable precompilation behavior (performance optimized)
-fn parse_list(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&str, Value> {
+fn parse_list(
+    input: &str,
+    should_precompile: ShouldPrecompileOps,
+    depth: usize,
+) -> IResult<&str, Value> {
     // Parse opening parenthesis and whitespace
     let (input, _) = char('(')(input)?;
     let (input, _) = multispace0(input)?;
@@ -185,7 +191,7 @@ fn parse_list(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&s
     if is_quote.is_some() {
         // Handle quote specially - parse exactly one more element unprecompiled
         let (input, _) = multispace1(input)?;
-        let (input, content) = parse_sexpr(input, ShouldPrecompileOps::No)?;
+        let (input, content) = parse_sexpr(input, ShouldPrecompileOps::No, depth + 1)?;
         let (input, _) = multispace0(input)?;
         let (input, _) = char(')')(input)?;
 
@@ -203,8 +209,9 @@ fn parse_list(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&s
     }
 
     // Regular list parsing - parse all elements in one pass
-    let (input, elements) =
-        separated_list0(multispace1, |input| parse_sexpr(input, should_precompile))(input)?;
+    let (input, elements) = separated_list0(multispace1, |input| {
+        parse_sexpr(input, should_precompile, depth + 1)
+    })(input)?;
 
     // Parse closing parenthesis and whitespace
     let (input, _) = multispace0(input)?;
@@ -231,12 +238,22 @@ fn parse_list(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&s
 }
 
 /// Parse an S-expression with configurable precompilation behavior
-fn parse_sexpr(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&str, Value> {
+fn parse_sexpr(
+    input: &str,
+    should_precompile: ShouldPrecompileOps,
+    depth: usize,
+) -> IResult<&str, Value> {
+    if depth >= MAX_PARSE_DEPTH {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::TooLarge,
+        )));
+    }
     preceded(
         multispace0,
         alt((
-            |input| parse_quote(input, should_precompile), // Pass precompilation setting to quote
-            |input| parse_list(input, should_precompile),
+            |input| parse_quote(input, should_precompile, depth), // Pass precompilation setting to quote
+            |input| parse_list(input, should_precompile, depth),
             parse_number,
             parse_bool,
             parse_string,
@@ -246,9 +263,13 @@ fn parse_sexpr(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&
 }
 
 /// Parse quoted expression ('expr -> (quote expr))
-fn parse_quote(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&str, Value> {
+fn parse_quote(
+    input: &str,
+    should_precompile: ShouldPrecompileOps,
+    depth: usize,
+) -> IResult<&str, Value> {
     let (input, _) = char('\'')(input)?;
-    let (input, expr) = parse_sexpr(input, ShouldPrecompileOps::No)?; // Use unprecompiled parsing for quoted content
+    let (input, expr) = parse_sexpr(input, ShouldPrecompileOps::No, depth + 1)?; // Use unprecompiled parsing for quoted content
 
     // Create PrecompiledOp only if precompilation is enabled
     if should_precompile == ShouldPrecompileOps::Yes {
@@ -266,7 +287,7 @@ fn parse_quote(input: &str, should_precompile: ShouldPrecompileOps) -> IResult<&
 /// Parse a complete S-expression from input with optimization enabled
 pub fn parse(input: &str) -> Result<Value, SchemeError> {
     match terminated(
-        |input| parse_sexpr(input, ShouldPrecompileOps::Yes),
+        |input| parse_sexpr(input, ShouldPrecompileOps::Yes, 0),
         multispace0,
     )(input)
     {
@@ -508,8 +529,16 @@ mod tests {
             ("test_name", success(sym("test_name"))),
             // Alphanumeric combinations
             ("var123", success(sym("var123"))),
-            // Invalid - numbers at start cause parse error
+            ("-", success(sym("-"))),
+            ("-abc", success(sym("-abc"))),
+            // Invalid symbol tests - numbers at start cause parse error, or invalid chars
             ("123var", Error),
+            ("-42name", Error),
+            ("test space", Error),
+            ("test@home", Error),
+            ("test#tag", Error),
+            ("test$var", Error),
+            ("test%percent", Error),
             // ===== BOOLEAN PARSING =====
             // Valid booleans
             ("#t", success(true)),
@@ -691,6 +720,9 @@ mod tests {
             ("(1 2))", SpecificError("ParseError")),
             // Invalid starting characters
             (")", SpecificError("ParseError")),
+            // ===== DEPTH LIMIT TESTS =====
+            // Test that deeply nested expressions are rejected (MAX_PARSE_DEPTH = 32)
+            // This prevents stack overflow attacks from deeply nested structures
             ("@invalid", SpecificError("ParseError")),
             // Empty or whitespace-only input
             ("", SpecificError("ParseError")),
@@ -705,5 +737,46 @@ mod tests {
         ];
 
         run_parse_tests(test_cases);
+    }
+
+    #[test]
+    fn test_parser_depth_limits() {
+        // Create depth limit test strings
+        let parens_under_limit = format!(
+            "{}unbound{}",
+            "(".repeat(MAX_PARSE_DEPTH - 1),
+            ")".repeat(MAX_PARSE_DEPTH - 1)
+        );
+        let quotes_under_limit = format!("{}unbound", "'".repeat(MAX_PARSE_DEPTH - 1));
+        let deep_parens_at_limit = format!(
+            "{}1{}",
+            "(".repeat(MAX_PARSE_DEPTH),
+            ")".repeat(MAX_PARSE_DEPTH)
+        );
+        let deep_quotes_at_limit = format!("{}a", "'".repeat(MAX_PARSE_DEPTH));
+
+        let depth_test_cases = vec![
+            // At/over limit should fail at parse time with specific error
+            (
+                deep_parens_at_limit.as_str(),
+                SpecificError("Invalid syntax"),
+            ),
+            (
+                deep_quotes_at_limit.as_str(),
+                SpecificError("Invalid syntax"),
+            ),
+        ];
+
+        run_parse_tests(depth_test_cases);
+
+        // Verify that expressions just under the limit parse successfully
+        assert!(
+            parse(&parens_under_limit).is_ok(),
+            "Parens just under depth limit should parse successfully"
+        );
+        assert!(
+            parse(&quotes_under_limit).is_ok(),
+            "Quotes just under depth limit should parse successfully"
+        );
     }
 }

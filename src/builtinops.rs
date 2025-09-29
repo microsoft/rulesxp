@@ -102,8 +102,8 @@ impl Arity {
 pub enum OpKind {
     /// Regular function that takes arguments and returns a value
     Function(fn(&[Value]) -> Result<Value, SchemeError>),
-    /// Special form that requires access to the environment and unevaluated arguments
-    SpecialForm(fn(&[Value], &mut Environment) -> Result<Value, SchemeError>),
+    /// Special form that requires access to the environment, unevaluated arguments and current evaluation stack depth
+    SpecialForm(fn(&[Value], &mut Environment, usize) -> Result<Value, SchemeError>),
 }
 
 impl std::fmt::Debug for OpKind {
