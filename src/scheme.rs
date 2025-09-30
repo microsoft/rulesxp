@@ -11,7 +11,7 @@ use nom::{
 
 use crate::MAX_PARSE_DEPTH;
 use crate::SchemeError;
-use crate::ast::{SYMBOL_SPECIAL_CHARS, Value, is_valid_symbol};
+use crate::ast::{NumberType, SYMBOL_SPECIAL_CHARS, Value, is_valid_symbol};
 use crate::builtinops::{find_scheme_op, get_quote_op};
 
 /// Helper function to create a quote PrecompiledOp
@@ -19,7 +19,7 @@ fn create_quote_precompiled_op(content: &Value) -> Value {
     let builtin_op = get_quote_op();
     Value::PrecompiledOp {
         op: builtin_op,
-        op_id: builtin_op.scheme_id.to_string(),
+        op_id: builtin_op.scheme_id.into(),
         args: vec![content.clone()],
     }
 }
@@ -49,12 +49,12 @@ fn parse_error_to_message(input: &str, error: nom::Err<Error<&str>>) -> String {
                             input.chars().skip(position).take(10).collect();
                         format!("Invalid syntax near '{}'", remaining_chars)
                     } else {
-                        "Unexpected end of input".to_string()
+                        "Unexpected end of input".into()
                     }
                 }
             }
         }
-        nom::Err::Incomplete(_) => "Incomplete input".to_string(),
+        nom::Err::Incomplete(_) => "Incomplete input".into(),
     }
 }
 
@@ -70,7 +70,7 @@ fn parse_decimal(input: &str) -> IResult<&str, Value> {
         take_while1(|c: char| c.is_ascii_digit()),
     ))(input)?;
 
-    match number_str.parse::<i64>() {
+    match number_str.parse::<NumberType>() {
         Ok(n) => Ok((input, Value::Number(n))),
         Err(_) => {
             // Parse failed - could be due to overflow or invalid format
@@ -89,7 +89,7 @@ fn parse_hexadecimal(input: &str) -> IResult<&str, Value> {
     let (input, _) = alt((char('x'), char('X')))(input)?;
     let (input, hex_digits) = take_while1(|c: char| c.is_ascii_hexdigit())(input)?;
 
-    match i64::from_str_radix(hex_digits, 16) {
+    match NumberType::from_str_radix(hex_digits, 16) {
         Ok(n) => Ok((input, Value::Number(n))),
         Err(_) => Err(nom::Err::Error(nom::error::Error::new(
             input,
@@ -114,7 +114,7 @@ fn parse_symbol(input: &str) -> IResult<&str, Value> {
     let (remaining, candidate) = symbol_chars(input)?;
 
     if is_valid_symbol(candidate) {
-        Ok((remaining, Value::Symbol(candidate.to_string())))
+        Ok((remaining, Value::Symbol(candidate.into())))
     } else {
         Err(nom::Err::Error(nom::error::Error::new(
             input,
@@ -204,7 +204,7 @@ fn parse_list(
         // Fallback to unprecompiled list representation (only when precompilation disabled)
         return Ok((
             input,
-            Value::List(vec![Value::Symbol("quote".to_string()), content]),
+            Value::List(vec![Value::Symbol("quote".into()), content]),
         ));
     }
 
@@ -228,7 +228,7 @@ fn parse_list(
             input,
             Value::PrecompiledOp {
                 op: builtin_op,
-                op_id: builtin_op.scheme_id.to_string(),
+                op_id: builtin_op.scheme_id.into(),
                 args,
             },
         ));
@@ -280,7 +280,7 @@ fn parse_quote(
     // Fallback to unprecompiled representation (only when precompilation disabled)
     Ok((
         input,
-        Value::List(vec![Value::Symbol("quote".to_string()), expr]),
+        Value::List(vec![Value::Symbol("quote".into()), expr]),
     ))
 }
 
@@ -481,6 +481,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
     fn test_parser_comprehensive() {
         use crate::builtinops::find_scheme_op;
 
@@ -498,16 +499,16 @@ mod tests {
             ("#x0", success(0)),
             ("#x12345", success(74565)),
             // Edge cases - large integer literals
-            ("9223372036854775807", success(9223372036854775807i64)), // max i64
-            ("-9223372036854775808", success(-9223372036854775808i64)), // min i64
+            ("9223372036854775807", success(i64::MAX)),
+            ("-9223372036854775808", success(i64::MIN)),
             // Number parsing failures
             ("3.14", Error),                  // Floating point should fail
             ("#xG", Error),                   // Invalid hexadecimal should fail
             ("#x", Error),                    // Incomplete hex should fail
             ("#y123", Error),                 // Invalid hex prefix should fail
             ("123abc", Error),                // Mixed should fail
-            ("99999999999999999999", Error),  // Too large for i64
-            ("-99999999999999999999", Error), // Too small for i64
+            ("99999999999999999999", Error),  // Too large for NumberType
+            ("-99999999999999999999", Error), // Too small for NumberType
             // ===== SYMBOL PARSING =====
             // Basic symbols
             ("foo", success(sym("foo"))),
@@ -523,6 +524,7 @@ mod tests {
             ("test!name", success(sym("test!name"))),
             ("test?name", success(sym("test?name"))),
             ("test_name", success(sym("test_name"))),
+            ("test$name", success(sym("test$name"))),
             // Alphanumeric combinations
             ("var123", success(sym("var123"))),
             ("-", success(sym("-"))),
@@ -533,7 +535,6 @@ mod tests {
             ("test space", Error),
             ("test@home", Error),
             ("test#tag", Error),
-            ("test$var", Error),
             ("test%percent", Error),
             // ===== BOOLEAN PARSING =====
             // Valid booleans
@@ -620,7 +621,7 @@ mod tests {
                 success([
                     val(Value::PrecompiledOp {
                         op: find_scheme_op("+").unwrap(),
-                        op_id: "+".to_string(),
+                        op_id: "+".into(),
                         args: vec![val(1), val(2)],
                     }),
                     val([sym("foo"), sym("bar")]),
@@ -633,7 +634,7 @@ mod tests {
                     "car",
                     vec![val(Value::PrecompiledOp {
                         op: find_scheme_op("list").unwrap(),
-                        op_id: "list".to_string(),
+                        op_id: "list".into(),
                         args: vec![val(1), val(2), val(3)],
                     })],
                 ),

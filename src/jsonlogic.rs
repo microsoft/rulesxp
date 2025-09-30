@@ -11,7 +11,7 @@ use serde_json;
 enum CompilationContext {
     /// Normal JSONLogic compilation - objects become operations, arrays become lists
     Normal,
-    /// Array element context - used for elements inside JSONLogic arrays (operations still allowed)
+    /// Array element context - used for elements inside JSONLogic arrays (operations still work)
     ArrayElement,
     /// Quote context - everything becomes literal data, no operations compiled
     Quote,
@@ -44,7 +44,7 @@ fn compile_json_to_ast_with_context(
     match json {
         // Primitives
         serde_json::Value::Null => Err(SchemeError::ParseError(
-            "null values are not supported in this JSONLogic implementation".to_string(),
+            "null values are not supported in this JSONLogic implementation".into(),
         )),
         serde_json::Value::Bool(b) => Ok(Value::Bool(b)),
         serde_json::Value::Number(n) => {
@@ -81,7 +81,7 @@ fn compile_json_to_ast_with_context(
                     let list_op = get_list_op();
                     Ok(Value::PrecompiledOp {
                         op: list_op,
-                        op_id: list_op.scheme_id.to_string(),
+                        op_id: list_op.scheme_id.into(),
                         args: converted,
                     })
                 }
@@ -90,7 +90,7 @@ fn compile_json_to_ast_with_context(
         serde_json::Value::Object(obj) => {
             if obj.len() != 1 {
                 return Err(SchemeError::ParseError(
-                    "JSONLogic operations must have exactly one operator".to_string(),
+                    "JSONLogic operations must have exactly one operator".into(),
                 ));
             }
 
@@ -107,7 +107,7 @@ fn compile_json_to_ast_with_context(
                                 Ok(Value::Symbol(var_name))
                             }
                             _ => Err(SchemeError::ParseError(
-                                "Variable must be a valid symbol string".to_string(),
+                                "Variable must be a valid symbol string".into(),
                             )),
                         }
                     } else {
@@ -171,24 +171,35 @@ fn compile_jsonlogic_operation(
     let create_precompiled_op = |builtin_op: &'static BuiltinOp, args: Vec<Value>| -> Value {
         Value::PrecompiledOp {
             op: builtin_op,
-            op_id: builtin_op.scheme_id.to_string(),
+            op_id: builtin_op.scheme_id.into(),
             args,
         }
     };
 
     // Special cases that need manual handling
+    // Note: In this implementation == is an alias to === and != to !==. While these operations normally have
+    // significantly different semantics, in this implementation, there is no type coercion so their behavior is identical!
     match operator {
-        // != needs special handling with binary arity validation, since equal? takes arbitrary arguments
-        "!=" => {
+        // !== and != need special handling with binary arity validation, since equal? takes arbitrary arguments
+        "!==" | "!=" => {
             let args = extract_operand_list(operands)?;
-            // Validate that we have exactly 2 arguments for != operation
+            // Validate that we have exactly 2 arguments for not-equal operation
             Arity::Exact(2).validate(args.len())?;
 
-            let equal_builtin = find_jsonlogic_op("==").expect("== builtin should exist");
+            let equal_builtin = find_jsonlogic_op("===").expect("=== builtin should exist");
             let equal_op = create_precompiled_op(equal_builtin, args);
 
             let not_builtin = find_jsonlogic_op("!").expect("! builtin should exist");
             Ok(create_precompiled_op(not_builtin, vec![equal_op]))
+        }
+
+        // == is an alias for === (handled here to avoid duplicate registry entries)
+        "==" => {
+            let args = extract_operand_list(operands)?;
+            let equal_builtin = find_jsonlogic_op("===").expect("=== builtin should exist");
+            // Validate arity using the builtin operation's definition
+            equal_builtin.validate_arity(args.len())?;
+            Ok(create_precompiled_op(equal_builtin, args))
         }
 
         // Variable access (JSONLogic specific)
@@ -197,7 +208,7 @@ fn compile_jsonlogic_operation(
                 Ok(Value::Symbol(var_name))
             }
             _ => Err(SchemeError::ParseError(
-                "Variable must be a valid symbol string".to_string(),
+                "Variable must be a valid symbol string".into(),
             )),
         },
 
@@ -207,9 +218,7 @@ fn compile_jsonlogic_operation(
             let operand = match operands {
                 serde_json::Value::Array(mut arr) => {
                     if arr.len() != 1 {
-                        return Err(SchemeError::ParseError(
-                            "quote requires one operand".to_string(),
-                        ));
+                        return Err(SchemeError::ParseError("quote requires one operand".into()));
                     }
                     arr.pop().unwrap()
                 }
@@ -226,7 +235,7 @@ fn compile_jsonlogic_operation(
             let quote_op = get_quote_op();
             Ok(Value::PrecompiledOp {
                 op: quote_op,
-                op_id: quote_op.scheme_id.to_string(),
+                op_id: quote_op.scheme_id.into(),
                 args: vec![quoted_data],
             })
         }
@@ -259,7 +268,7 @@ fn compile_jsonlogic_operation(
                         )));
                     }
                     let args = extract_operand_list(operands)?;
-                    let mut result = vec![Value::Symbol(operator.to_string())];
+                    let mut result = vec![Value::Symbol(operator.into())];
                     result.extend(args);
                     Ok(Value::List(result))
                 }
@@ -319,12 +328,12 @@ fn ast_to_json_value_with_context(
             }
         }
         Value::BuiltinFunction { .. } => Err(SchemeError::EvalError(
-            "Cannot convert builtin function".to_string(),
+            "Cannot convert builtin function".into(),
         )),
         Value::PrecompiledOp { op, args, .. } => {
             if in_quote_context {
                 return Err(SchemeError::EvalError(
-                    "PrecompiledOp in quote context".to_string(),
+                    "PrecompiledOp in quote context".into(),
                 ));
             }
 
@@ -376,6 +385,7 @@ mod tests {
     use TestResult::*;
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
     fn test_jsonlogic_to_scheme_equivalence() {
         // Test cases as tuples: (jsonlogic, scheme_equivalent)
         let test_cases = vec![
@@ -394,8 +404,9 @@ mod tests {
             (r#"{"+": []}"#, Identical("(+)")),
             (r#"{"-": [10, 3]}"#, Identical("(- 10 3)")),
             (r#"{"*": [2, 3, 4]}"#, Identical("(* 2 3 4)")),
-            // Comparison operations
-            (r#"{"==": [1, 2]}"#, Identical("(equal? 1 2)")),
+            // Equality operations - === is canonical, == is alias
+            (r#"{"===": [1, 2]}"#, Identical("(equal? 1 2)")),
+            (r#"{"==": [1, 2]}"#, SemanticallyEquivalent("(equal? 1 2)")),
             (r#"{">": [5, 3]}"#, Identical("(> 5 3)")),
             (r#"{"<": [2, 5]}"#, Identical("(< 2 5)")),
             (r#"{">=": [5, 5]}"#, Identical("(>= 5 5)")),
@@ -404,7 +415,11 @@ mod tests {
             (r#"{"and": [true, false]}"#, Identical("(and #t #f)")),
             (r#"{"or": [false, false]}"#, Identical("(or #f #f)")),
             (r#"{"!": [true]}"#, Identical("(not #t)")),
-            // Special != operation (expands to (not (equal? ...))) - use SemanticallyEquivalent since roundtrip differs
+            // Not-equal operations - !== is canonical, != is alias (both expand to (not (equal? ...)))
+            (
+                r#"{"!==": [1, 2]}"#,
+                SemanticallyEquivalent("(not (equal? 1 2))"),
+            ),
             (
                 r#"{"!=": [1, 2]}"#,
                 SemanticallyEquivalent("(not (equal? 1 2))"),
@@ -429,6 +444,21 @@ mod tests {
                 r#"{"if": [{">": [10, 5]}, "big", "small"]}"#,
                 Identical(r#"(if (> 10 5) "big" "small")"#),
             ),
+            // String operations
+            (
+                r#"{"cat": "hello"}"#,
+                SemanticallyEquivalent(r#"(string-append "hello")"#),
+            ),
+            (
+                r#"{"cat": ["hello", " ", "world"]}"#,
+                Identical(r#"(string-append "hello" " " "world")"#),
+            ),
+            (r#"{"cat": []}"#, Identical("(string-append)")),
+            // Math operations
+            (r#"{"max": [1, 2, 3]}"#, Identical("(max 1 2 3)")),
+            (r#"{"max": 5}"#, SemanticallyEquivalent("(max 5)")),
+            (r#"{"min": [1, 2, 3]}"#, Identical("(min 1 2 3)")),
+            (r#"{"min": 5}"#, SemanticallyEquivalent("(min 5)")),
             // Unknown operations should still be emitted
             (
                 r#"{"unknown": [1, 2, 3]}"#,
@@ -440,8 +470,10 @@ mod tests {
             ),
             // Error cases
             ("null", Error), // Null values should be rejected
-            (r#"{"!=": [1]}"#, SpecificError("ArityError")), // Not equal with wrong arity should fail
-            (r#"{"!=": [1, 2, 3]}"#, SpecificError("ArityError")), // Not equal with too many args should fail
+            (r#"{"!==": [1]}"#, SpecificError("ArityError")), // Not equal with wrong arity should fail
+            (r#"{"!==": [1, 2, 3]}"#, SpecificError("ArityError")), // Not equal with too many args should fail
+            (r#"{"!=": [1]}"#, SpecificError("ArityError")), // != alias also fails with wrong arity
+            (r#"{"!=": [1, 2, 3]}"#, SpecificError("ArityError")), // != alias also fails with too many args
             (r#"{"if": [true, "yes"]}"#, SpecificError("ArityError")), // If with wrong arity should fail
             ("invalid json", Error),                                   // Invalid JSON should fail
             (r#"{"and": true, "or": false}"#, Error), // Multiple keys in object should fail
@@ -509,22 +541,27 @@ mod tests {
             (r#"{"!": false}"#, SemanticallyEquivalent("(not #f)")), // Unary NOT without array
             (r#"{"-": 2}"#, SemanticallyEquivalent("(- 2)")),       // Unary minus
             (r#"{"-": -2}"#, SemanticallyEquivalent("(- -2)")),     // Unary minus of negative
-            // Type coercion edge cases (these should now fail due to strict typing)
-            (
-                r#"{"==": [1, "1"]}"#,
-                IdenticalWithEvalError("(equal? 1 \"1\")"),
-            ), // Type coercion rejected: number vs string
-            (
-                r#"{"==": [0, false]}"#,
-                IdenticalWithEvalError("(equal? 0 #f)"),
-            ), // Type coercion rejected: number vs boolean
-            // Strict equality operators (these become unknown operations since they're not Scheme builtins)
-            (r#"{"===": [1, 1]}"#, IdenticalWithEvalError("(=== 1 1)")), // Strict equality becomes unknown operation
+            // Type coercion edge cases - our language rejects type coercion with strict typing
             (
                 r#"{"===": [1, "1"]}"#,
-                IdenticalWithEvalError("(=== 1 \"1\")"),
-            ), // Strict equality becomes unknown operation
-            (r#"{"!==": [1, 2]}"#, IdenticalWithEvalError("(!== 1 2)")), // Strict not-equal becomes unknown operation
+                IdenticalWithEvalError("(equal? 1 \"1\")"),
+            ), // Strict equality: different types cause type error (no coercion)
+            (
+                r#"{"===": [0, false]}"#,
+                IdenticalWithEvalError("(equal? 0 #f)"),
+            ), // Strict equality: different types cause type error (no coercion)
+            // Test that == alias works the same as === (but roundtrips to === canonical form)
+            // Type mismatch cases are handled by the alias behavior - no special tests needed
+            // Test additional === cases (canonical equality)
+            (r#"{"===": [1, 1]}"#, Identical("(equal? 1 1)")), // Canonical strict equality
+            (r#"{"===": [true, true]}"#, Identical("(equal? #t #t)")), // Boolean equality
+            (
+                r#"{"===": ["hello", "hello"]}"#,
+                Identical("(equal? \"hello\" \"hello\")"),
+            ), // String equality
+            // !== expands to (not (equal? ...)) so it won't roundtrip identically
+            // Type mismatch cases are handled by the underlying equal? behavior
+            // != type mismatch cases are handled by the alias behavior - no special tests needed
             // Between operations (chained comparisons)
             (r#"{"<": [1, 2, 3]}"#, Identical("(< 1 2 3)")), // Between exclusive (1 < 2 < 3)
             (r#"{"<": [1, 1, 3]}"#, Identical("(< 1 1 3)")), // Between exclusive fails at equality

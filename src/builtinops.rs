@@ -50,7 +50,7 @@
 //! 5. **Add comprehensive tests** covering edge cases and error conditions
 
 use crate::SchemeError;
-use crate::ast::Value;
+use crate::ast::{NumberType, Value};
 use crate::evaluator::{
     Environment, eval_and, eval_define, eval_if, eval_lambda, eval_or, eval_quote,
 };
@@ -151,6 +151,7 @@ impl PartialEq for BuiltinOp {
 
 impl BuiltinOp {
     /// Check if this operation is a special form
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn is_special_form(&self) -> bool {
         matches!(self.op_kind, OpKind::SpecialForm(_))
     }
@@ -182,7 +183,7 @@ macro_rules! numeric_comparison {
                             return Ok(Value::Bool(false));
                         }
                     }
-                    _ => return Err(SchemeError::TypeError(concat!($op_str, " requires numbers").to_string())),
+                    _ => return Err(SchemeError::TypeError(concat!($op_str, " requires numbers").into())),
                 }
             }
 
@@ -199,15 +200,14 @@ numeric_comparison!(builtin_le, <=, "<=");
 numeric_comparison!(builtin_ge, >=, ">=");
 
 fn builtin_add(args: &[Value]) -> Result<Value, SchemeError> {
-    let mut sum = 0i64;
+    let mut sum = 0 as NumberType;
     for arg in args {
-        match arg {
-            Value::Number(n) => {
-                sum = sum.checked_add(*n).ok_or_else(|| {
-                    SchemeError::EvalError("Integer overflow in addition".to_string())
-                })?;
-            }
-            _ => return Err(SchemeError::TypeError("+ requires numbers".to_string())),
+        if let Value::Number(n) = arg {
+            sum = sum
+                .checked_add(*n)
+                .ok_or_else(|| SchemeError::EvalError("Integer overflow in addition".into()))?;
+        } else {
+            return Err(SchemeError::TypeError("+ requires numbers".into()));
         }
     }
     Ok(Value::Number(sum))
@@ -218,26 +218,25 @@ fn builtin_sub(args: &[Value]) -> Result<Value, SchemeError> {
         [] => Err(SchemeError::arity_error(1, 0)),
         [Value::Number(first)] => {
             // Unary minus: check for overflow when negating
-            let result = first.checked_neg().ok_or_else(|| {
-                SchemeError::EvalError("Integer overflow in negation".to_string())
-            })?;
+            let result = first
+                .checked_neg()
+                .ok_or_else(|| SchemeError::EvalError("Integer overflow in negation".into()))?;
             Ok(Value::Number(result))
         }
         [Value::Number(first), rest @ ..] => {
             let mut result = *first;
             for arg in rest {
-                match arg {
-                    Value::Number(n) => {
-                        result = result.checked_sub(*n).ok_or_else(|| {
-                            SchemeError::EvalError("Integer overflow in subtraction".to_string())
-                        })?;
-                    }
-                    _ => return Err(SchemeError::TypeError("- requires numbers".to_string())),
+                if let Value::Number(n) = arg {
+                    result = result.checked_sub(*n).ok_or_else(|| {
+                        SchemeError::EvalError("Integer overflow in subtraction".into())
+                    })?;
+                } else {
+                    return Err(SchemeError::TypeError("- requires numbers".into()));
                 }
             }
             Ok(Value::Number(result))
         }
-        _ => Err(SchemeError::TypeError("- requires numbers".to_string())),
+        _ => Err(SchemeError::TypeError("- requires numbers".into())),
     }
 }
 
@@ -247,15 +246,14 @@ fn builtin_mul(args: &[Value]) -> Result<Value, SchemeError> {
         return Err(SchemeError::arity_error(1, 0));
     }
 
-    let mut product = 1i64;
+    let mut product = 1 as NumberType;
     for arg in args {
-        match arg {
-            Value::Number(n) => {
-                product = product.checked_mul(*n).ok_or_else(|| {
-                    SchemeError::EvalError("Integer overflow in multiplication".to_string())
-                })?;
-            }
-            _ => return Err(SchemeError::TypeError("* requires numbers".to_string())),
+        if let Value::Number(n) = arg {
+            product = product.checked_mul(*n).ok_or_else(|| {
+                SchemeError::EvalError("Integer overflow in multiplication".into())
+            })?;
+        } else {
+            return Err(SchemeError::TypeError("* requires numbers".into()));
         }
     }
     Ok(Value::Number(product))
@@ -264,10 +262,10 @@ fn builtin_mul(args: &[Value]) -> Result<Value, SchemeError> {
 fn builtin_car(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
         [Value::List(list)] => match list.as_slice() {
-            [] => Err(SchemeError::EvalError("car of empty list".to_string())),
+            [] => Err(SchemeError::EvalError("car of empty list".into())),
             [first, ..] => Ok(first.clone()),
         },
-        [_] => Err(SchemeError::TypeError("car requires a list".to_string())),
+        [_] => Err(SchemeError::TypeError("car requires a list".into())),
         _ => Err(SchemeError::arity_error(1, args.len())),
     }
 }
@@ -275,10 +273,10 @@ fn builtin_car(args: &[Value]) -> Result<Value, SchemeError> {
 fn builtin_cdr(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
         [Value::List(list)] => match list.as_slice() {
-            [] => Err(SchemeError::EvalError("cdr of empty list".to_string())),
+            [] => Err(SchemeError::EvalError("cdr of empty list".into())),
             [_, rest @ ..] => Ok(Value::List(rest.to_vec())),
         },
-        [_] => Err(SchemeError::TypeError("cdr requires a list".to_string())),
+        [_] => Err(SchemeError::TypeError("cdr requires a list".into())),
         _ => Err(SchemeError::arity_error(1, args.len())),
     }
 }
@@ -313,7 +311,7 @@ fn builtin_not(args: &[Value]) -> Result<Value, SchemeError> {
     match args {
         [Value::Bool(b)] => Ok(Value::Bool(!b)),
         [_] => Err(SchemeError::TypeError(
-            "not requires a boolean argument".to_string(),
+            "not requires a boolean argument".into(),
         )),
         _ => Err(SchemeError::arity_error(1, args.len())),
     }
@@ -345,6 +343,44 @@ fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
     }
 }
 
+fn builtin_string_append(args: &[Value]) -> Result<Value, SchemeError> {
+    let mut result = String::new();
+    for arg in args {
+        if let Value::String(s) = arg {
+            result.push_str(s);
+        } else {
+            return Err(SchemeError::TypeError(
+                "string-append requires string arguments".into(),
+            ));
+        }
+    }
+    Ok(Value::String(result))
+}
+
+macro_rules! min_max_op {
+    ($name:ident, $op:ident, $initial:expr, $op_name:expr) => {
+        fn $name(args: &[Value]) -> Result<Value, SchemeError> {
+            if args.is_empty() {
+                return Err(SchemeError::arity_error(1, 0));
+            }
+            let mut result = $initial;
+            for arg in args {
+                if let Value::Number(n) = arg {
+                    result = result.$op(*n);
+                } else {
+                    return Err(SchemeError::TypeError(
+                        concat!($op_name, " requires number arguments").into(),
+                    ));
+                }
+            }
+            Ok(Value::Number(result))
+        }
+    };
+}
+
+min_max_op!(builtin_max, max, NumberType::MIN, "max");
+min_max_op!(builtin_min, min, NumberType::MAX, "min");
+
 fn builtin_error(args: &[Value]) -> Result<Value, SchemeError> {
     // Convert a value to error message string
     fn value_to_error_string(value: &Value) -> String {
@@ -365,7 +401,7 @@ fn builtin_error(args: &[Value]) -> Result<Value, SchemeError> {
     }
 
     match args {
-        [] => Err(SchemeError::EvalError("Error".to_string())),
+        [] => Err(SchemeError::EvalError("Error".into())),
         [single] => Err(SchemeError::EvalError(value_to_error_string(single))),
         [first, rest @ ..] => Err(SchemeError::EvalError(build_error_message(first, rest))),
     }
@@ -425,7 +461,7 @@ static BUILTIN_OPS: &[BuiltinOp] = &[
     },
     BuiltinOp {
         scheme_id: "equal?",
-        jsonlogic_id: "==",
+        jsonlogic_id: "===",
         op_kind: OpKind::Function(builtin_equal),
         arity: Arity::Exact(2),
     },
@@ -509,6 +545,26 @@ static BUILTIN_OPS: &[BuiltinOp] = &[
         jsonlogic_id: "scheme-null?",
         op_kind: OpKind::Function(builtin_null),
         arity: Arity::Exact(1),
+    },
+    // String operations
+    BuiltinOp {
+        scheme_id: "string-append",
+        jsonlogic_id: "cat",
+        op_kind: OpKind::Function(builtin_string_append),
+        arity: Arity::Any,
+    },
+    // Math operations
+    BuiltinOp {
+        scheme_id: "max",
+        jsonlogic_id: "max",
+        op_kind: OpKind::Function(builtin_max),
+        arity: Arity::AtLeast(1),
+    },
+    BuiltinOp {
+        scheme_id: "min",
+        jsonlogic_id: "min",
+        op_kind: OpKind::Function(builtin_min),
+        arity: Arity::AtLeast(1),
     },
     // Error handling
     BuiltinOp {
@@ -610,12 +666,12 @@ mod tests {
         // Test operator mappings
         // JSONLogic to Scheme mapping
         assert_eq!(find_jsonlogic_op("!").unwrap().scheme_id, "not");
-        assert_eq!(find_jsonlogic_op("==").unwrap().scheme_id, "equal?");
+        assert_eq!(find_jsonlogic_op("===").unwrap().scheme_id, "equal?");
         assert_eq!(find_jsonlogic_op("+").unwrap().scheme_id, "+");
 
         // Scheme to JSONLogic mapping (test inline conversion)
         assert_eq!(find_scheme_op("not").unwrap().jsonlogic_id, "!");
-        assert_eq!(find_scheme_op("equal?").unwrap().jsonlogic_id, "==");
+        assert_eq!(find_scheme_op("equal?").unwrap().jsonlogic_id, "===");
         assert_eq!(find_scheme_op("+").unwrap().jsonlogic_id, "+"); // Same in both
 
         // Test arithmetic operations
@@ -646,6 +702,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
     fn test_builtin_function_implementations() {
         type TestCase = (&'static str, Result<Value, SchemeError>, Option<Value>);
 
@@ -831,15 +888,24 @@ mod tests {
             // =================================================================
 
             // Integer overflow cases (should fail)
-            test!(builtin_add(&[val(i64::MAX), val(1)]), None), // Addition overflow
-            test!(builtin_mul(&[val(i64::MAX), val(2)]), None), // Multiplication overflow
-            test!(builtin_sub(&[val(i64::MIN)]), None),         // Negation overflow
-            test!(builtin_sub(&[val(i64::MIN), val(1)]), None), // Subtraction overflow
+            test!(builtin_add(&[val(NumberType::MAX), val(1)]), None), // Addition overflow
+            test!(builtin_mul(&[val(NumberType::MAX), val(2)]), None), // Multiplication overflow
+            test!(builtin_sub(&[val(NumberType::MIN)]), None),         // Negation overflow
+            test!(builtin_sub(&[val(NumberType::MIN), val(1)]), None), // Subtraction overflow
             // Boundary values (should succeed)
-            test!(builtin_add(&[val(i64::MAX), val(0)]), success(i64::MAX)),
-            test!(builtin_sub(&[val(i64::MIN), val(0)]), success(i64::MIN)),
-            test!(builtin_mul(&[val(i64::MAX), val(1)]), success(i64::MAX)),
-            test!(builtin_mul(&[val(0), val(i64::MAX)]), success(0)),
+            test!(
+                builtin_add(&[val(NumberType::MAX), val(0)]),
+                success(NumberType::MAX)
+            ),
+            test!(
+                builtin_sub(&[val(NumberType::MIN), val(0)]),
+                success(NumberType::MIN)
+            ),
+            test!(
+                builtin_mul(&[val(NumberType::MAX), val(1)]),
+                success(NumberType::MAX)
+            ),
+            test!(builtin_mul(&[val(0), val(NumberType::MAX)]), success(0)),
             // Operations with zero
             test!(builtin_add(&[val(0)]), success(0)),
             test!(builtin_sub(&[val(0)]), success(0)),
@@ -852,10 +918,22 @@ mod tests {
             // =================================================================
 
             // Boundary comparisons
-            test!(builtin_gt(&[val(i64::MAX), val(i64::MIN)]), success(true)),
-            test!(builtin_lt(&[val(i64::MIN), val(i64::MAX)]), success(true)),
-            test!(builtin_ge(&[val(i64::MAX), val(i64::MAX)]), success(true)),
-            test!(builtin_le(&[val(i64::MIN), val(i64::MIN)]), success(true)),
+            test!(
+                builtin_gt(&[val(NumberType::MAX), val(NumberType::MIN)]),
+                success(true)
+            ),
+            test!(
+                builtin_lt(&[val(NumberType::MIN), val(NumberType::MAX)]),
+                success(true)
+            ),
+            test!(
+                builtin_ge(&[val(NumberType::MAX), val(NumberType::MAX)]),
+                success(true)
+            ),
+            test!(
+                builtin_le(&[val(NumberType::MIN), val(NumberType::MIN)]),
+                success(true)
+            ),
             // Long chain comparisons
             test!(
                 builtin_lt(&[val(-5), val(-2), val(0), val(3), val(10)]),
@@ -891,6 +969,47 @@ mod tests {
                 builtin_list(&many_elements),
                 success((0..50).map(val).collect::<Vec<_>>())
             ),
+            // =================================================================
+            // STRING OPERATIONS
+            // =================================================================
+
+            // Basic string concatenation
+            test!(builtin_string_append(&[]), success("")),
+            test!(builtin_string_append(&[val("hello")]), success("hello")),
+            test!(
+                builtin_string_append(&[val("hello"), val(" "), val("world")]),
+                success("hello world")
+            ),
+            test!(
+                builtin_string_append(&[val(""), val("test"), val("")]),
+                success("test")
+            ),
+            // Error cases - non-string arguments
+            test!(builtin_string_append(&[val(42)]), None),
+            test!(builtin_string_append(&[val("hello"), val(123)]), None),
+            test!(builtin_string_append(&[val(true), val("world")]), None),
+            // =================================================================
+            // MATH OPERATIONS - MAX/MIN
+            // =================================================================
+
+            // Basic max operations
+            test!(builtin_max(&[val(5)]), success(5)),
+            test!(builtin_max(&[val(1), val(2), val(3)]), success(3)),
+            test!(builtin_max(&[val(3), val(1), val(2)]), success(3)),
+            test!(builtin_max(&[val(-5), val(-1), val(-10)]), success(-1)),
+            // Basic min operations
+            test!(builtin_min(&[val(5)]), success(5)),
+            test!(builtin_min(&[val(1), val(2), val(3)]), success(1)),
+            test!(builtin_min(&[val(3), val(1), val(2)]), success(1)),
+            test!(builtin_min(&[val(-5), val(-1), val(-10)]), success(-10)),
+            // Error cases - no arguments
+            test!(builtin_max(&[]), None),
+            test!(builtin_min(&[]), None),
+            // Error cases - non-number arguments
+            test!(builtin_max(&[val("hello")]), None),
+            test!(builtin_min(&[val(true)]), None),
+            test!(builtin_max(&[val(1), val("hello")]), None),
+            test!(builtin_min(&[val(1), val(true)]), None),
             // =================================================================
             // EQUALITY STRICT TYPING - OVERRIDE BASIC EQUAL TESTS
             // =================================================================
@@ -949,7 +1068,7 @@ mod tests {
         for (args, expected_msg) in test_cases {
             match builtin_error(&args).unwrap_err() {
                 SchemeError::EvalError(msg) => {
-                    assert_eq!(msg, expected_msg, "Failed for args: {:?}", args)
+                    assert_eq!(msg, expected_msg, "Failed for args: {:?}", args);
                 }
                 _ => panic!("Expected EvalError for args: {:?}", args),
             }

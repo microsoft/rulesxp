@@ -35,10 +35,6 @@ impl Environment {
             .get(name)
             .or_else(|| self.parent.as_ref().and_then(|parent| parent.get(name)))
     }
-
-    pub(crate) fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
-        self.bindings.get_mut(name)
-    }
 }
 
 /// Evaluate an S-expression (public API)
@@ -315,87 +311,59 @@ fn is_obviously_non_boolean(value: &Value) -> bool {
     }
 }
 
-/// Evaluate and special form (strict boolean evaluation)
-pub(crate) fn eval_and(
-    args: &[Value],
-    env: &mut Environment,
-    depth: usize,
-) -> Result<Value, SchemeError> {
-    // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
-    if args.is_empty() {
-        return Err(SchemeError::arity_error(1, 0));
-    }
-
-    // First pass: check for obviously non-boolean arguments before evaluation, so that short-circuit evaluation doesn't hide gross errors
-    for arg in args.iter() {
-        if is_obviously_non_boolean(arg) {
-            return Err(SchemeError::TypeError(
-                "SCHEME-JSONLOGIC-STRICT: 'and' requires boolean arguments (no truthiness)"
-                    .to_string(),
-            ));
-        }
-    }
-
-    // Second pass: evaluate each argument and require it to be a boolean
-    for arg in args.iter() {
-        let result = eval_with_depth_tracking(arg, env, depth + 1)?;
-
-        match result {
-            Value::Bool(false) => return Ok(Value::Bool(false)),
-            Value::Bool(true) => continue,
-            _ => {
-                return Err(SchemeError::TypeError(
-                    "SCHEME-JSONLOGIC-STRICT: 'and' requires boolean arguments (no truthiness)"
-                        .to_string(),
-                ));
+macro_rules! boolean_logic_op {
+    ($name:ident, $op_name:expr, $short_circuit:literal, $default:literal) => {
+        pub(crate) fn $name(
+            args: &[Value],
+            env: &mut Environment,
+            depth: usize,
+        ) -> Result<Value, SchemeError> {
+            // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
+            if args.is_empty() {
+                return Err(SchemeError::arity_error(1, 0));
             }
-        }
-    }
 
-    // All arguments were true
-    Ok(Value::Bool(true))
+            // First pass: check for obviously non-boolean arguments before evaluation, so that short-circuit evaluation doesn't hide gross errors
+            for arg in args.iter() {
+                if is_obviously_non_boolean(arg) {
+                    return Err(SchemeError::TypeError(
+                        concat!(
+                            "SCHEME-JSONLOGIC-STRICT: '",
+                            $op_name,
+                            "' requires boolean arguments (no truthiness)"
+                        )
+                        .to_string(),
+                    ));
+                }
+            }
+
+            // Second pass: evaluate and short-circuit
+            for arg in args.iter() {
+                let result = eval_with_depth_tracking(arg, env, depth + 1)?;
+                match result {
+                    Value::Bool($short_circuit) => return Ok(Value::Bool($short_circuit)),
+                    Value::Bool(_) => continue,
+                    _ => {
+                        return Err(SchemeError::TypeError(
+                            concat!(
+                                "SCHEME-JSONLOGIC-STRICT: '",
+                                $op_name,
+                                "' requires boolean arguments (no truthiness)"
+                            )
+                            .to_string(),
+                        ));
+                    }
+                }
+            }
+
+            Ok(Value::Bool($default))
+        }
+    };
 }
 
-/// Evaluate or special form (strict boolean evaluation)
-pub(crate) fn eval_or(
-    args: &[Value],
-    env: &mut Environment,
-    depth: usize,
-) -> Result<Value, SchemeError> {
-    // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #f)
-    if args.is_empty() {
-        return Err(SchemeError::arity_error(1, 0));
-    }
-
-    // First pass: check for obviously non-boolean arguments before evaluation, so that short-circuit evaluation doesn't hide gross errors
-    for arg in args.iter() {
-        if is_obviously_non_boolean(arg) {
-            return Err(SchemeError::TypeError(
-                "SCHEME-JSONLOGIC-STRICT: 'or' requires boolean arguments (no truthiness)"
-                    .to_string(),
-            ));
-        }
-    }
-
-    // Second pass: evaluate each argument and require it to be a boolean
-    for arg in args {
-        let result = eval_with_depth_tracking(arg, env, depth + 1)?;
-
-        match result {
-            Value::Bool(true) => return Ok(Value::Bool(true)),
-            Value::Bool(false) => continue,
-            _ => {
-                return Err(SchemeError::TypeError(
-                    "SCHEME-JSONLOGIC-STRICT: 'or' requires boolean arguments (no truthiness)"
-                        .to_string(),
-                ));
-            }
-        }
-    }
-
-    // All arguments were false
-    Ok(Value::Bool(false))
-}
+// Generate boolean logic functions
+boolean_logic_op!(eval_and, "and", false, true);
+boolean_logic_op!(eval_or, "or", true, false);
 
 /// Create a global environment with built-in functions
 pub fn create_global_env() -> Environment {
@@ -524,6 +492,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
     fn test_comprehensive_operations_data_driven() {
         let test_cases = vec![
             // === SELF-EVALUATING FORMS ===
@@ -656,6 +625,34 @@ mod tests {
             ("(cons 'a (cons 'b '()))", success([sym("a"), sym("b")])),
             // Lambda with empty parameter list
             ("((lambda () 42))", success(42)),
+            // === STRING OPERATIONS ===
+            // Basic string concatenation
+            ("(string-append)", success("")),
+            ("(string-append \"hello\")", success("hello")),
+            (
+                "(string-append \"hello\" \" \" \"world\")",
+                success("hello world"),
+            ),
+            ("(string-append \"\" \"test\" \"\")", success("test")),
+            ("(string-append 42)", Error),
+            ("(string-append \"hello\" 123)", Error),
+            ("(string-append #t \"world\")", Error),
+            // === MATH OPERATIONS - MAX/MIN ===
+            // Basic max operations
+            ("(max 5)", success(5)),
+            ("(max 1 2 3)", success(3)),
+            ("(max 3 1 2)", success(3)),
+            ("(max -5 -1 -10)", success(-1)),
+            // Basic min operations
+            ("(min 5)", success(5)),
+            ("(min 1 2 3)", success(1)),
+            ("(min 3 1 2)", success(1)),
+            ("(min -5 -1 -10)", success(-10)),
+            // Error cases - non-number arguments
+            ("(max \"hello\")", Error),
+            ("(min #t)", Error),
+            ("(max 1 \"hello\")", Error),
+            ("(min 1 #t)", Error),
             // === CONDITIONAL OPERATIONS ===
             // Basic if expressions
             ("(if #t 1 2)", success(1)),
@@ -763,6 +760,10 @@ mod tests {
                 "undefined-var",
                 SpecificError("Unbound variable: undefined-var"),
             ),
+            // set! special form test - not implemented in this interpreter
+            // This Environment model uses immutable bindings where variables are looked up
+            // by traversing the environment chain, but mutation would require mutable references
+            // throughout the chain. If set! were supported this design would need revisiting
             ("(set! x 42)", SpecificError("Unbound variable: set!")), // Unsupported special forms appear as unbound variables
             // Type errors
             (

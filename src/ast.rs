@@ -10,8 +10,12 @@
 use crate::SchemeError;
 use crate::builtinops::BuiltinOp;
 
+/// Type alias for number values in our Scheme interpreter
+pub type NumberType = i64;
+
 /// Allowed non-alphanumeric characters in Scheme symbol names
-pub const SYMBOL_SPECIAL_CHARS: &str = "+-*/<>=!?_";
+/// Most represent mathematical symbols or predicates ("?"), "$" supported for JavaScript identifiers   
+pub const SYMBOL_SPECIAL_CHARS: &str = "+-*/<>=!?_$";
 
 /// Check if a string is a valid Scheme symbol name
 /// Valid: non-empty, no leading digit, no "-digit" prefix, alphanumeric + SYMBOL_SPECIAL_CHARS
@@ -54,7 +58,7 @@ pub(crate) fn is_valid_symbol(name: &str) -> bool {
 #[derive(Debug, Clone)]
 pub enum Value {
     /// Numbers (integers only)
-    Number(i64),
+    Number(NumberType),
     /// Symbols (identifiers)
     Symbol(String),
     /// String literals
@@ -119,7 +123,7 @@ macro_rules! impl_from_integer {
 impl_from_integer!(i8);
 impl_from_integer!(i16);
 impl_from_integer!(i32);
-impl_from_integer!(i64); // Special case - no casting
+impl_from_integer!(NumberType); // Special case - no casting
 impl_from_integer!(u8);
 impl_from_integer!(u16);
 impl_from_integer!(u32);
@@ -144,26 +148,23 @@ impl<T: Into<Value> + Clone> From<&[T]> for Value {
 
 ///   Helper function for creating symbols - works great in mixed lists!
 ///   Accepts both &str and String via Into<&str>
+#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn sym<S: AsRef<str>>(name: S) -> Value {
     Value::Symbol(name.as_ref().to_string())
 }
 
 /// Helper function for creating Values - works great in mixed lists!
 /// Accepts any type that can be converted to Value
+#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn val<T: Into<Value>>(value: T) -> Value {
     value.into()
 }
 
 /// Helper function for creating empty lists (nil) - follows Lisp/Scheme conventions
 /// In Lisp, nil represents the empty list
+#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn nil() -> Value {
     Value::List(vec![])
-}
-
-/// Helper function for creating unspecified values
-/// These are returned by operations like define that have no meaningful return value
-pub(crate) fn unspecified() -> Value {
-    Value::Unspecified
 }
 
 impl std::fmt::Display for Value {
@@ -302,15 +303,12 @@ mod helper_function_tests {
             (val(-128i8), Value::Number(-128)),
             (val(65535u16), Value::Number(65535)),
             (val(-32768i16), Value::Number(-32768)),
-            (
-                val(9223372036854775807i64),
-                Value::Number(9223372036854775807),
-            ),
-            (val(i64::MIN), Value::Number(i64::MIN)),
+            (val(NumberType::MAX), Value::Number(NumberType::MAX)),
+            (val(NumberType::MIN), Value::Number(NumberType::MIN)),
             // Basic booleans
             (val(true), Value::Bool(true)),
             (val("hello"), Value::String("hello".to_string())),
-            (val(""), Value::String("".to_string())),
+            (val(""), Value::String(String::new())),
             // Sym, from both &str and String
             (sym("foo-bar?"), Value::Symbol("foo-bar?".to_string())),
             (sym("-"), Value::Symbol("-".to_string())),
