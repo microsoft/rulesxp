@@ -1,8 +1,8 @@
-//! S-expression interpreter with dual Scheme and JSONLogic support.
+//! RulesXP - Multi-language rules expression evaluator.
 //!
 //! This crate provides a minimalistic expression evaluator that supports both Scheme syntax
-//! and JSONLogic operations. It implements a proper subset of both languages with stronger
-//! typing guarantees than either parent language.
+//! and JSONLogic operations with strict typing. It implements a proper subset of both
+//! languages designed for reliable rule evaluation with predictable behavior.
 //!
 //! ## Dual Language Support
 //!
@@ -119,5 +119,9 @@ impl fmt::Display for SchemeError {
 pub mod ast;
 pub mod builtinops;
 pub mod evaluator;
+
+#[cfg(feature = "jsonlogic")]
 pub mod jsonlogic;
+
+#[cfg(feature = "scheme")]
 pub mod scheme;

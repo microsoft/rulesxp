@@ -386,7 +386,7 @@ pub fn create_global_env() -> Environment {
     env
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "scheme"))]
 mod tests {
     use super::*;
     use crate::ast::{nil, sym, val};

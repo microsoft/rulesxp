@@ -1,14 +1,35 @@
 [package]
-name = "sexpr"
+name = "rulesxp"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.90"
+description = "Multi-language rules expression evaluator supporting JSONLogic and Scheme with strict typing"
+authors = ["Eugene Talagrand"]
+license = "MIT"
+repository = "https://github.com/microsoft/rulesxp"
+keywords = ["jsonlogic", "scheme", "expression", "evaluator", "rules"]
+categories = ["parsing", "compilers"]
+
+[features]
+default = []
+scheme = []
+jsonlogic = ["dep:serde_json"]
+
+[[example]]
+name = "demo"
+required-features = ["scheme", "jsonlogic"]
+
+[[example]]
+name = "repl"
+required-features = ["scheme", "jsonlogic"]
 
 [dependencies]
 nom = "7.1"
 thiserror = "1.0"
+serde_json = { version = "1.0", optional = true }
+
+[dev-dependencies]
 rustyline = "13.0"
-serde_json = "1.0"
-phf = { version = "0.11", features = ["macros"] }
 
 [profile.release]
 # Optimize for size

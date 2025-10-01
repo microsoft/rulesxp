@@ -1,12 +1,13 @@
+use rulesxp::ast::Value;
+use rulesxp::evaluator;
+use rulesxp::jsonlogic::{ast_to_jsonlogic, parse_jsonlogic};
+use rulesxp::scheme::parse_scheme;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
-use sexpr::ast::Value;
-use sexpr::evaluator;
-use sexpr::jsonlogic::{ast_to_jsonlogic, parse_jsonlogic};
-use sexpr::scheme::parse_scheme;
 
 fn main() {
-    println!("Mini Scheme Interpreter v0.1.0 with JSONLogic Support");
+    println!("RulesXP Multi-Language Rules Expression Evaluator");
+    println!("Supports JSONLogic and Scheme with strict typing");
     println!("Enter S-expressions like: (+ 1 2)");
     println!("Enter JSONLogic like: {{\"and\": [true, {{\">\":[5,3]}}]}}");
     println!("Type :help for more commands, or Ctrl+C to exit.");
@@ -17,7 +18,7 @@ fn main() {
     let mut jsonlogic_mode = false;
 
     loop {
-        match rl.readline("scheme> ") {
+        match rl.readline("rulesxp> ") {
             Ok(line) => {
                 let line = line.trim();
                 if line.is_empty() {
@@ -151,6 +152,6 @@ fn print_help() {
     println!();
 }
 
-fn print_environment(_env: &sexpr::evaluator::Environment) {
+fn print_environment(_env: &rulesxp::evaluator::Environment) {
     println!("TODO: Print environment");
 }

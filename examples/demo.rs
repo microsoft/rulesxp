@@ -1,9 +1,13 @@
-use sexpr::evaluator;
-use sexpr::jsonlogic::parse_jsonlogic;
-use sexpr::scheme::parse_scheme;
+use rulesxp::evaluator;
+
+#[cfg(feature = "jsonlogic")]
+use rulesxp::jsonlogic::parse_jsonlogic;
+
+#[cfg(feature = "scheme")]
+use rulesxp::scheme::parse_scheme;
 
 fn main() {
-    println!("=== Dual-Language Scheme/JSONLogic Demo ===\n");
+    println!("=== RulesXP: Dual-Language Scheme/JSONLogic Demo ===\n");
 
     let env = evaluator::create_global_env();
 

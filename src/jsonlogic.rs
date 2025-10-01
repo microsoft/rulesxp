@@ -4,7 +4,6 @@ use crate::ast::{Value, is_valid_symbol};
 use crate::builtinops::{
     Arity, BuiltinOp, find_jsonlogic_op, find_scheme_op, get_list_op, get_quote_op,
 };
-use serde_json;
 
 /// Indicates the compilation context for JSON values
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -366,7 +365,7 @@ fn ast_to_json_value_with_context(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "scheme"))]
 mod tests {
     use core::panic;
 

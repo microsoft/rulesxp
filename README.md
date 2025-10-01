@@ -1,325 +1,187 @@
-# Mini Scheme Interpreter
+# RulesXP
 
-A minimal Scheme-compatible interpreter implemented in Rust, for evaluating S-expressions with strict type safety and comprehensive error handling.
+**Multi-Language Rules Expression Evaluator**
+
+RulesXP is a minimalistic expression evaluator that supports both JSONLogic and Scheme syntax with strict typing.
+It's designed for reliable rule evaluation with predictable behavior.
+
+**Note that this project is a work in progress and the API and feature set are expected to change**
 
 ## Features
 
-### Data Types
-- **Numbers**: Integer numbers only (`42`, `-5`, `#xFF`, `#x1A`)
-- **Booleans**: `#t` (true) and `#f` (false)
+### Dual Language Support
+The project supports minimalistic subsets of:
+- **JSONLogic**: Industry-standard rules engine syntax
+- **Scheme R7RS**: Lisp-family functional programming syntax
+
+### Strict Typing
+- **No Type Coercion**: `1 !== "1"` and `0 !== false`
+- **Type Error Detection**: Type mismatches caught at evaluation time
+- **Predictable Behavior**: No JavaScript-style truthiness or automatic conversions
+
+### Core Data Types
+- **Numbers**: 64-bit integers (`42`, `-5`, `#xFF`)
+- **Booleans**: `true`/`false` (JSONLogic) or `#t`/`#f` (Scheme)
 - **Strings**: `"hello world"`
+- **Lists**: `[1,2,3]` (JSONLogic) or `(list 1 2 3)` (Scheme)
 - **Symbols**: Identifiers like `foo`, `+`, `>=`
-- **Lists**: `(1 2 3)`, including nested lists
-- **Nil**: Empty list `()`
-- **Functions**: Both built-in and user-defined lambda functions
 
-### Special Forms
-- **`quote`**: Return literal data without evaluation
-  ```scheme
-  (quote hello)       ; => hello
-  (quote (1 2 3))     ; => (1 2 3)
-  'hello              ; => hello (shorthand)
-  '(1 2 3)            ; => (1 2 3) (shorthand)
-  ```
+## Language Examples
 
-- **`define`**: Define variables and functions
-  ```scheme
-  (define x 42)
-  (define square (lambda (x) (* x x)))
-  ```
+### JSONLogic Syntax
+```jsonc
+{"===": [1, 1]}           // Strict equality
+{"and": [true, false]}    // Boolean logic
+{"+": [1, 2, 3]}         // Arithmetic
+{"if": [true, "yes", "no"]} // Conditionals
+{"<": [1, 2, 3]}         // Chained comparisons
+```
 
-- **`if`**: Conditional expressions
-  ```scheme
-  (if #t 1 2)         ; => 1
-  (if #f 1 2)         ; => 2
-  (if #t 1)           ; => 1
-  (if #f 1)           ; => ()
-  ```
+### Scheme Syntax
+```scheme
+(equal? 1 1)             ; Strict equality
+(and #t #f)              ; Boolean logic
+(+ 1 2 3)                ; Arithmetic
+(if #t "yes" "no")       ; Conditionals
+(< 1 2 3)                ; Chained comparisons
+```
 
-- **`lambda`**: Create anonymous functions
-  ```scheme
-  (lambda (x) (* x x))
-  ((lambda (x y) (+ x y)) 3 4)  ; => 7
-  ```
+### Equivalence Examples
+| JSONLogic | Scheme | Result |
+|-----------|--------|--------|
+| `{"===": [1, 1]}` | `(equal? 1 1)` | `true` |
+| `{"!==": [1, 2]}` | `(not (equal? 1 2))` | `true` |
+| `{"+": [1, 2]}` | `(+ 1 2)` | `3` |
+| `{"and": [true, {">":[5,3]}]}` | `(and #t (> 5 3))` | `true` |
 
-### Built-in Functions
+## Installation & Usage
 
-#### Arithmetic
-- **`+`**: Addition (`(+ 1 2 3)` => `6`)
-- **`-`**: Subtraction (`(- 10 3 2)` => `5`, `(- 5)` => `-5`)
-- **`*`**: Multiplication (`(* 2 3 4)` => `24`)
+### As a Library
+Add to your `Cargo.toml`:
+```toml
+[dependencies]
+rulesxp = "0.1.0"
+```
 
-#### Logic Operations
-- **`and`**: Logical AND - requires boolean arguments only
-  ```scheme
-  (and #t #f)         ; => #f
-  (and #t #t)         ; => #t  
-  (and)               ; => #t
-  (and 1 2)           ; => Error: and requires boolean arguments
-  ```
-- **`or`**: Logical OR - requires boolean arguments only
-  ```scheme
-  (or #f #t)          ; => #t
-  (or #f #f)          ; => #f
-  (or)                ; => #f
-  (or 1 2)            ; => Error: or requires boolean arguments
-  ```
-- **`not`**: Logical NOT - requires boolean argument only
-  ```scheme
-  (not #t)            ; => #f
-  (not #f)            ; => #t
-  (not 42)            ; => Error: not requires a boolean argument
-  ```
+### Basic Usage
+```rust
+use rulesxp::{jsonlogic::parse_jsonlogic, scheme::parse_scheme, evaluator::*};
 
-#### General Equality
-- **`equal?`**: Structural equality for all types (`(equal? "hello" "hello")` => `#t`)
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut env = create_global_env();
 
-#### Error Handling
-- **`error`**: Raise an error with custom message
-  ```scheme
-  (error "Something went wrong")           ; Raises error with message
-  (error "Code:" 404 "not found")         ; Multiple arguments
-  ```
+    // JSONLogic evaluation
+    let jsonlogic_expr = parse_jsonlogic(r#"{"and": [true, {">": [5, 3]}]}"#)?;
+    let result = eval(&jsonlogic_expr, &mut env)?;
+    println!("Result: {}", result); // true
 
-#### Comparison
-- **`=`**: Equality (`(= 5 5)` => `#t`)
-- **`<`**: Less than (`(< 3 5)` => `#t`)
-- **`>`**: Greater than (`(> 5 3)` => `#t`)
-- **`<=`**: Less than or equal (`(<= 5 5)` => `#t`)
-- **`>=`**: Greater than or equal (`(>= 5 3)` => `#t`)
+    // Scheme evaluation
+    let scheme_expr = parse_scheme("(and #t (> 5 3))")?;
+    let result = eval(&scheme_expr, &mut env)?;
+    println!("Result: {}", result); // #t
 
-#### List Operations
-- **`car`**: First element of list (`(car (list 1 2 3))` => `1`)
-- **`cdr`**: Rest of list (`(cdr (list 1 2 3))` => `(2 3)`)
-- **`cons`**: Add element to front (`(cons 0 (list 1 2))` => `(0 1 2)`)
-- **`list`**: Create list (`(list 1 2 3)` => `(1 2 3)`)
-- **`null?`**: Check if empty (`(null? ())` => `#t`)
+    Ok(())
+}
+```
 
-## Usage
+### Command Line Tools
 
-### REPL (Interactive Mode)
+#### Interactive REPL (a demo is also available)
 ```bash
-cargo run --bin repl
+cargo run --example repl --features="scheme jsonlogic"
 ```
 
-This starts an interactive Read-Eval-Print Loop where you can type Scheme expressions:
 
-```
-Mini Scheme Interpreter v0.1.0
-Type expressions to evaluate them, or Ctrl+C to exit.
+## Supported Operations
 
-scheme> (+ 1 2 3)
-6
-scheme> (define square (lambda (x) (* x x)))
-square
-scheme> (square 5)
-25
-scheme> :help
-Mini Scheme Interpreter Commands:
-  :help    - Show this help message
-  :env     - Show current environment bindings
-  :quit    - Exit the interpreter
-  :exit    - Exit the interpreter
+### Arithmetic
+- `+`, `-`, `*`: Basic arithmetic with overflow detection
+- Supports variadic operations: `(+ 1 2 3 4)` or `{"+": [1,2,3,4]}`
+
+### Comparisons
+- `===`, `!==`: Strict equality (no type coercion)
+- `>`, `<`, `>=`, `<=`: Numeric comparisons with chaining
+
+### Boolean Logic
+- `and`, `or`: Short-circuiting logical operations
+- `not` (`!`): Logical negation
+
+### String Operations
+- `string-append` (`cat`): String concatenation
+
+### List Operations
+- `list`: Create lists from arguments
+- `car`, `cdr`: List access (first element, rest of list)
+
+### Control Flow
+- `if`: Three-argument conditional (`if condition then else`)
+
+### Utilities
+- `max`, `min`: Find maximum/minimum values
+- `quote`: Return literal data without evaluation
+
+## Error Handling
+
+RulesXP enforces strict error handling:
+
+```jsonc
+// Type mismatches are errors
+{"===": [1, "1"]}        // Error: Cannot compare number and string
+{"and": [1, true]}       // Error: Expected boolean, got number
+
+// Arity errors caught at parse time
+{"if": [true]}           // Error: 'if' requires exactly 3 arguments
+{"not": []}              // Error: 'not' requires exactly 1 argument
 ...
 ```
 
 ### As a Library
 ```rust
-use sexpr::{parser, evaluator, Environment};
+use rulesxp::{jsonlogic::parse_jsonlogic, scheme::parse_scheme, evaluator::*};
 
 let mut env = evaluator::create_global_env();
-let expr = parser::parse("(+ 1 2 3)").unwrap();
+let expr = scheme::parse_scheme("(+ 1 2 3)").unwrap();
 let result = evaluator::eval(&expr, &mut env).unwrap();
 println!("{}", result); // 6
 ```
 
-## Examples
+## Current Status
 
-### Basic Arithmetic
-```scheme
-scheme> (+ 10 (* 3 4) (- 8 3))
-27
+### Implemented
+- [x] JSONLogic and Scheme parsers
+- [x] Core arithmetic, boolean, and comparison operations
+- [x] String operations and list construction
+- [x] Error handling with clear messages
+- [x] Interactive REPL with dual-language support
 
-scheme> (* (+ 2 3) (- 7 2))
-25
-```
+### Future Plans
+- [ ] Additional language syntax support
+- [ ] Stabilized Rust API
+- [ ] ABI for FFI from C++/C#
 
-### Variable Definition and Usage
-```scheme
-scheme> (define radius 5)
-radius
-scheme> (* radius radius)
-25
-```
+## Contributing
 
-### Function Definition
-```scheme
-scheme> (define abs (lambda (x) (if (< x 0) (- x) x)))
-abs
-scheme> (abs -5)
-5
-scheme> (abs 3)
-3
-```
+This project welcomes contributions and suggestions.  Most contributions require you to agree to a
+Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
+the rights to use your contribution. For details, visit [Contributor License Agreements](https://cla.opensource.microsoft.com).
 
-### Higher-Order Functions
-```scheme
-scheme> (define twice (lambda (f x) (f (f x))))
-twice
-scheme> (define inc (lambda (x) (+ x 1)))
-inc
-scheme> (twice inc 5)
-7
-```
+When you submit a pull request, a CLA bot will automatically determine whether you need to provide
+a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions
+provided by the bot. You will only need to do this once across all repos using our CLA.
 
-### List Processing
-```scheme
-scheme> (define my-list (list 1 2 3 4 5))
-my-list
-scheme> (car my-list)
-1
-scheme> (cdr my-list)
-(2 3 4 5)
-scheme> (cons 0 my-list)
-(0 1 2 3 4 5)
-```
+This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
+For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
+contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
 
-### Quote and Data Manipulation
-```scheme
-scheme> (quote hello)
-hello
-scheme> 'world
-world
-scheme> '(+ 1 2 3)
-(+ 1 2 3)
-scheme> (car '(a b c))
-a
-scheme> '()
-()
-scheme> (null? '())
-#t
-```
+## Trademarks
 
-### Lexical Scoping
-```scheme
-scheme> (define make-adder (lambda (n) (lambda (x) (+ x n))))
-make-adder
-scheme> (define add5 (make-adder 5))
-add5
-scheme> (add5 10)
-15
-```
+This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft
+trademarks or logos is subject to and must follow
+[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/legal/intellectualproperty/trademarks/usage/general).
+Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
+Any use of third-party trademarks or logos are subject to those third-party's policies.
 
-## Architecture
+## Repository
 
-The interpreter is built with three main components:
-
-1. **Parser** (`src/parser.rs`): Uses the `nom` parsing library to convert text into S-expressions
-2. **Evaluator** (`src/evaluator.rs`): Evaluates S-expressions in environments with proper lexical scoping
-3. **REPL** (`src/bin/repl.rs`): Interactive shell using `rustyline` for command history and editing
-
-### Core Types
-- `Value`: Enum representing all possible Scheme values
-- `Environment`: Hash map-based environment for variable bindings with parent chain for scoping
-- `SchemeError`: Comprehensive error types for parsing and evaluation errors
-
-## Differences from Standard Scheme
-
-This implementation is **stricter** than standard Scheme in several ways:
-
-### 1. Integer-Only Arithmetic
-- **Standard Scheme**: Supports integers, rationals, reals, and complex numbers
-- **This Implementation**: Only supports 64-bit signed integers (`i64`)
-- **Impact**: No floating-point arithmetic, division operator removed to avoid precision issues
-  ```scheme
-  ; Standard Scheme
-  (+ 1.5 2.3)         ; => 3.8
-  (/ 7 3)             ; => 7/3 or 2.333...
-  
-  ; This Implementation  
-  (+ 1 2)             ; => 3 (integers only)
-  (/ 7 3)             ; Error: / not implemented
-  ```
-
-### 2. Strict Boolean Logic Operations
-- **Standard Scheme**: `and`, `or`, `not`, `if` use truthy/falsy semantics (only `#f` and `()` are false)
-- **This Implementation**: Requires actual boolean values (`#t` or `#f`) for all boolean operations
-- **Impact**: Must explicitly convert values to booleans, more predictable control flow
-  ```scheme
-  ; Standard Scheme
-  (and 1 2 3)         ; => 3 (returns last truthy value)
-  (or #f 42)          ; => 42 (returns first truthy value)
-  (not 0)             ; => #f (0 is truthy)
-  (if 42 "yes" "no")  ; => "yes" (42 is truthy)
-  
-  ; This Implementation
-  (and #t #t)         ; => #t (booleans only)
-  (and 1 2)           ; Error: and requires boolean arguments
-  (or #f #t)          ; => #t (booleans only) 
-  (not 42)            ; Error: not requires a boolean argument
-  (if #t "yes" "no")  ; => "yes" (booleans only)
-  (if 42 "yes" "no")  ; Error: if condition must be a boolean
-  ```
-
-### 3. Numeric-Only Equality Operator
-- **Standard Scheme**: `=` can compare various numeric types
-- **This Implementation**: `=` only works on integers, `equal?` for general equality
-- **Impact**: Type-safe numeric comparisons, separate general equality
-  ```scheme
-  ; Standard Scheme
-  (= 5 5.0)           ; => #t (numeric equality across types)
-  (= "hello" "hello") ; Often an error, but varies
-  
-  ; This Implementation
-  (= 5 5)             ; => #t (integers only)
-  (= "hello" "hello") ; Error: = requires numbers
-  (equal? "hello" "hello") ; => #t (use equal? for general equality)
-  ```
-
-### 4. Fixed Arity for Logic Operations
-- **Standard Scheme**: `and` and `or` can take any number of arguments (including zero)
-- **This Implementation**: Supports zero or more arguments, but all must be booleans
-- **Impact**: More predictable behavior, explicit boolean requirements
-  ```scheme
-  ; Both Standard Scheme and This Implementation
-  (and)               ; => #t
-  (or)                ; => #f
-  
-  ; Difference in argument types
-  (and #t 5 "hello")  ; Standard: => "hello", This: Error
-  ```
-
-### 5. Hexadecimal Integer Literals
-- **Standard Scheme**: Supports various numeric formats including hex (`#x1A`)
-- **This Implementation**: Supports decimal and hexadecimal integers
-- **Enhancement**: Added hexadecimal support (`#xFF`, `#x1A`) for integer literals
-
-### Benefits of Stricter Design
-- **Type Safety**: Catches type mismatches early at evaluation time
-- **Predictability**: No ambiguity about implicit type conversions
-- **Explicit Intent**: Forces developers to be clear about type expectations
-- **Educational Value**: Makes type system concepts more visible
-- **Reduced Complexity**: Simpler semantics with fewer edge cases
-
-## Limitations and Design Choices
-
-This is a **minimal** Scheme interpreter with intentionally **stricter semantics** than standard Scheme. 
-
-### Intentionally Stricter (Design Choices)
-- **Integer-only arithmetic**: Avoids floating-point precision issues
-- **Boolean-only logic operations**: Prevents implicit type conversions  
-- **Numeric-only `=` operator**: Type-safe equality checking
-- **Explicit type requirements**: Forces clear intent in code
-
-### Not Implemented (Complexity Reduction)
-- Recursive function definitions (requires `letrec` semantics)
-- Macros or syntax transformation
-- Continuations (`call/cc`)
-- Tail call optimization
-- Garbage collection beyond Rust's automatic memory management
-- Module system
-- Advanced numeric types (rationals, complex numbers)
-- Quote syntax sugar (`'x` for `(quote x)`)
-- Full R7RS compliance
-
+* <https://github.com/microsoft/rulesxp>
 
