@@ -35,6 +35,29 @@ impl Environment {
             .get(name)
             .or_else(|| self.parent.as_ref().and_then(|parent| parent.get(name)))
     }
+
+    /// Get all bindings in this environment and its parents
+    /// Returns a Vec of (name, value) pairs sorted by name
+    pub fn get_all_bindings(&self) -> Vec<(String, Value)> {
+        let mut bindings = HashMap::new();
+
+        // Start with parent bindings (so they can be overridden by local bindings)
+        if let Some(parent) = &self.parent {
+            for (name, value) in parent.get_all_bindings() {
+                bindings.insert(name, value);
+            }
+        }
+
+        // Add/override with local bindings
+        for (name, value) in &self.bindings {
+            bindings.insert(name.clone(), value.clone());
+        }
+
+        // Convert to sorted vector
+        let mut result: Vec<_> = bindings.into_iter().collect();
+        result.sort_by(|a, b| a.0.cmp(&b.0));
+        result
+    }
 }
 
 /// Evaluate an S-expression (public API)

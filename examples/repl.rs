@@ -126,10 +126,8 @@ fn run_repl() {
                     Err(e) => println!("Error: {e}"),
                 }
             }
-            Err(ReadlineError::Interrupted) => {
-                println!("Interrupted. Use Ctrl+D or :quit to exit.");
-            }
-            Err(ReadlineError::Eof) => {
+
+            Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => {
                 println!("Goodbye!");
                 break;
             }
@@ -152,6 +150,7 @@ fn print_help() {
     println!("               • JSONLogic mode: results as JSONLogic, shows Scheme translation (→)");
     println!("  :quit      - Exit the interpreter");
     println!("  :exit      - Exit the interpreter");
+    println!("  Ctrl+C     - Exit the interpreter");
     println!();
     println!("Supported languages:");
     println!("  S-expressions (Scheme): (+ 1 2), (and #t (> 5 3))");
@@ -174,6 +173,51 @@ fn print_help() {
     println!();
 }
 
-fn print_environment(_env: &rulesxp::evaluator::Environment) {
-    println!("TODO: Print environment");
+fn print_environment(env: &rulesxp::evaluator::Environment) {
+    let bindings = env.get_all_bindings();
+
+    if bindings.is_empty() {
+        println!("Environment is empty.");
+        return;
+    }
+
+    println!("Environment bindings ({} total):", bindings.len());
+    println!();
+
+    // Separate built-in functions from user-defined values
+    let mut builtins = Vec::new();
+    let mut user_defined = Vec::new();
+
+    for (name, value) in bindings {
+        match value {
+            rulesxp::ast::Value::BuiltinFunction { .. } => builtins.push(name),
+            _ => user_defined.push((name, value)),
+        }
+    }
+
+    // Print built-in functions
+    if !builtins.is_empty() {
+        println!("Built-in functions ({}):", builtins.len());
+        // Print in columns for readability
+        let mut col = 0;
+        for name in builtins {
+            print!("  {name:<15}");
+            col += 1;
+            if col % 4 == 0 {
+                println!();
+            }
+        }
+        if col % 4 != 0 {
+            println!();
+        }
+        println!();
+    }
+
+    // Print user-defined values
+    if !user_defined.is_empty() {
+        println!("User-defined values ({}):", user_defined.len());
+        for (name, value) in user_defined {
+            println!("  {name} = {value}");
+        }
+    }
 }
