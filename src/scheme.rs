@@ -1,5 +1,5 @@
 use nom::{
-    IResult,
+    IResult, Parser,
     branch::alt,
     bytes::complete::{tag, take_while1},
     character::complete::{char, multispace0, multispace1},
@@ -59,7 +59,7 @@ fn parse_error_to_message(input: &str, error: nom::Err<Error<&str>>) -> String {
 
 /// Parse a number (integer only, supports decimal and hexadecimal)
 fn parse_number(input: &str) -> IResult<&str, Value> {
-    alt((parse_hexadecimal, parse_decimal))(input)
+    alt((parse_hexadecimal, parse_decimal)).parse(input)
 }
 
 /// Parse a decimal number
@@ -67,7 +67,8 @@ fn parse_decimal(input: &str) -> IResult<&str, Value> {
     let (input, number_str) = recognize(pair(
         opt(char('-')),
         take_while1(|c: char| c.is_ascii_digit()),
-    ))(input)?;
+    ))
+    .parse(input)?;
 
     match number_str.parse::<NumberType>() {
         Ok(n) => Ok((input, Value::Number(n))),
@@ -84,9 +85,9 @@ fn parse_decimal(input: &str) -> IResult<&str, Value> {
 
 /// Parse a hexadecimal number (#x or #X prefix)
 fn parse_hexadecimal(input: &str) -> IResult<&str, Value> {
-    let (input, _) = char('#')(input)?;
-    let (input, _) = alt((char('x'), char('X')))(input)?;
-    let (input, hex_digits) = take_while1(|c: char| c.is_ascii_hexdigit())(input)?;
+    let (input, _) = char('#').parse(input)?;
+    let (input, _) = alt((char('x'), char('X'))).parse(input)?;
+    let (input, hex_digits) = take_while1(|c: char| c.is_ascii_hexdigit()).parse(input)?;
 
     match NumberType::from_str_radix(hex_digits, 16) {
         Ok(n) => Ok((input, Value::Number(n))),
@@ -102,15 +103,16 @@ fn parse_bool(input: &str) -> IResult<&str, Value> {
     alt((
         value(Value::Bool(true), tag("#t")),
         value(Value::Bool(false), tag("#f")),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 /// Parse a symbol (identifier)
 fn parse_symbol(input: &str) -> IResult<&str, Value> {
-    let symbol_chars =
+    let mut symbol_chars =
         take_while1(|c: char| c.is_alphanumeric() || SYMBOL_SPECIAL_CHARS.contains(c));
 
-    let (remaining, candidate) = symbol_chars(input)?;
+    let (remaining, candidate) = symbol_chars.parse(input)?;
 
     if is_valid_symbol(candidate) {
         Ok((remaining, Value::Symbol(candidate.into())))
@@ -124,7 +126,7 @@ fn parse_symbol(input: &str) -> IResult<&str, Value> {
 
 /// Parse a string literal
 fn parse_string(input: &str) -> IResult<&str, Value> {
-    let (mut remaining, _) = char('"')(input)?;
+    let (mut remaining, _) = char('"').parse(input)?;
     let mut chars = Vec::new();
 
     loop {
@@ -186,18 +188,18 @@ fn parse_list(
     depth: usize,
 ) -> IResult<&str, Value> {
     // Parse opening parenthesis and whitespace
-    let (input, _) = char('(')(input)?;
-    let (input, _) = multispace0(input)?;
+    let (input, _) = char('(').parse(input)?;
+    let (input, _) = multispace0.parse(input)?;
 
     // Early quote detection to avoid backtracking
-    let (input, is_quote) = opt(tag("quote"))(input)?;
+    let (input, is_quote) = opt(tag("quote")).parse(input)?;
 
     if is_quote.is_some() {
         // Handle quote specially - parse exactly one more element unprecompiled
-        let (input, _) = multispace1(input)?;
+        let (input, _) = multispace1.parse(input)?;
         let (input, content) = parse_sexpr(input, ShouldPrecompileOps::No, depth + 1)?;
-        let (input, _) = multispace0(input)?;
-        let (input, _) = char(')')(input)?;
+        let (input, _) = multispace0.parse(input)?;
+        let (input, _) = char(')').parse(input)?;
 
         // If precompilation is enabled, create a PrecompiledOp
         if should_precompile == ShouldPrecompileOps::Yes {
@@ -215,11 +217,12 @@ fn parse_list(
     // Regular list parsing - parse all elements in one pass
     let (input, elements) = separated_list0(multispace1, |input| {
         parse_sexpr(input, should_precompile, depth + 1)
-    })(input)?;
+    })
+    .parse(input)?;
 
     // Parse closing parenthesis and whitespace
-    let (input, _) = multispace0(input)?;
-    let (input, _) = char(')')(input)?;
+    let (input, _) = multispace0.parse(input)?;
+    let (input, _) = char(')').parse(input)?;
 
     // Apply precompilation if enabled - single lookup, no repeated string comparison
     if should_precompile == ShouldPrecompileOps::Yes
@@ -261,7 +264,8 @@ fn parse_sexpr(
             parse_string,
             parse_symbol,
         )),
-    )(input)
+    )
+    .parse(input)
 }
 
 /// Parse quoted expression ('expr -> (quote expr))
@@ -270,7 +274,7 @@ fn parse_quote(
     should_precompile: ShouldPrecompileOps,
     depth: usize,
 ) -> IResult<&str, Value> {
-    let (input, _) = char('\'')(input)?;
+    let (input, _) = char('\'').parse(input)?;
     let (input, expr) = parse_sexpr(input, ShouldPrecompileOps::No, depth + 1)?; // Use unprecompiled parsing for quoted content
 
     // Create PrecompiledOp only if precompilation is enabled
@@ -291,7 +295,8 @@ pub fn parse_scheme(input: &str) -> Result<Value, SchemeError> {
     match terminated(
         |input| parse_sexpr(input, ShouldPrecompileOps::Yes, 0),
         multispace0,
-    )(input)
+    )
+    .parse(input)
     {
         Ok(("", value)) => {
             // After successful parsing, validate arity for any PrecompiledOp
