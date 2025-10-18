@@ -4,8 +4,30 @@ use rulesxp::jsonlogic::{ast_to_jsonlogic, parse_jsonlogic};
 use rulesxp::scheme::parse_scheme;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
+use std::panic;
+use std::process;
 
 fn main() {
+    let result = panic::catch_unwind(|| {
+        run_repl();
+    });
+
+    if let Err(panic_info) = result {
+        eprintln!("The REPL encountered an unexpected error and must exit.");
+
+        if let Some(msg) = panic_info.downcast_ref::<&str>() {
+            eprintln!("Error: {msg}");
+        } else if let Some(msg) = panic_info.downcast_ref::<String>() {
+            eprintln!("Error: {msg}");
+        } else {
+            eprintln!("Error: Unknown panic occurred");
+        }
+
+        process::exit(1);
+    }
+}
+
+fn run_repl() {
     println!("RulesXP Multi-Language Rules Expression Evaluator");
     println!("Supports JSONLogic and Scheme with strict typing");
     println!("Enter S-expressions like: (+ 1 2)");
@@ -13,7 +35,7 @@ fn main() {
     println!("Type :help for more commands, or Ctrl+C to exit.");
     println!();
 
-    let mut rl = DefaultEditor::new().unwrap();
+    let mut rl = DefaultEditor::new().expect("Could not initialize REPL");
     let mut env = evaluator::create_global_env();
     let mut jsonlogic_mode = false;
 
@@ -67,7 +89,7 @@ fn main() {
                             Ok(expr) => {
                                 // If in Scheme mode, show the parsed expression as Scheme
                                 if !jsonlogic_mode {
-                                    println!("→ {}", expr);
+                                    println!("→ {expr}");
                                 }
                                 evaluator::eval(&expr, &mut env)
                             }
@@ -79,7 +101,7 @@ fn main() {
                             Ok(expr) => {
                                 // If in JSONLogic mode, show the parsed expression as JSONLogic
                                 if jsonlogic_mode && let Ok(json_str) = ast_to_jsonlogic(&expr) {
-                                    println!("→ {}", json_str);
+                                    println!("→ {json_str}");
                                 } // Skip if conversion fails
                                 evaluator::eval(&expr, &mut env)
                             }
@@ -93,15 +115,15 @@ fn main() {
                         if !matches!(result, Value::Unspecified) {
                             if jsonlogic_mode {
                                 match ast_to_jsonlogic(&result) {
-                                    Ok(json_str) => println!("{}", json_str),
-                                    Err(_) => println!("{}", result), // Fallback to S-expression if conversion fails
+                                    Ok(json_str) => println!("{json_str}"),
+                                    Err(_) => println!("{result}"), // Fallback to S-expression if conversion fails
                                 }
                             } else {
-                                println!("{}", result);
+                                println!("{result}");
                             }
                         }
                     }
-                    Err(e) => println!("Error: {}", e),
+                    Err(e) => println!("Error: {e}"),
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -112,7 +134,7 @@ fn main() {
                 break;
             }
             Err(err) => {
-                println!("Error: {:?}", err);
+                println!("Error: {err:?}");
                 break;
             }
         }

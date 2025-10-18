@@ -37,17 +37,16 @@ fn parse_error_to_message(input: &str, error: nom::Err<Error<&str>>) -> String {
         nom::Err::Error(e) | nom::Err::Failure(e) => {
             let position = input.len().saturating_sub(e.input.len());
             match e.code {
-                ErrorKind::Char => format!("Expected character at position {}", position),
-                ErrorKind::Tag => format!("Unexpected token at position {}", position),
-                ErrorKind::TooLarge => format!(
-                    "Expression too deeply nested (max depth: {})",
-                    MAX_PARSE_DEPTH
-                ),
+                ErrorKind::Char => format!("Expected character at position {position}"),
+                ErrorKind::Tag => format!("Unexpected token at position {position}"),
+                ErrorKind::TooLarge => {
+                    format!("Expression too deeply nested (max depth: {MAX_PARSE_DEPTH})")
+                }
                 _ => {
                     if position < input.len() {
                         let remaining_chars: String =
                             input.chars().skip(position).take(10).collect();
-                        format!("Invalid syntax near '{}'", remaining_chars)
+                        format!("Invalid syntax near '{remaining_chars}'")
                     } else {
                         "Unexpected end of input".into()
                     }
@@ -125,54 +124,59 @@ fn parse_symbol(input: &str) -> IResult<&str, Value> {
 
 /// Parse a string literal
 fn parse_string(input: &str) -> IResult<&str, Value> {
-    let (input, _) = char('"')(input)?;
+    let (mut remaining, _) = char('"')(input)?;
     let mut chars = Vec::new();
-    let mut remaining = input;
 
-    while let Some(ch) = remaining.chars().next() {
-        if ch == '"' {
-            // End of string
-            remaining = &remaining[1..];
-            return Ok((remaining, Value::String(chars.into_iter().collect())));
-        } else if ch == '\\' {
-            // Handle escape sequences
-            let mut char_iter = remaining.chars();
-            char_iter.next(); // consume '\'
-            if let Some(escaped) = char_iter.next() {
-                let escaped_char = match escaped {
-                    'n' => '\n',
-                    't' => '\t',
-                    'r' => '\r',
-                    '\\' => '\\',
-                    '"' => '"',
-                    _ => {
+    loop {
+        let mut char_iter = remaining.chars();
+        match char_iter.next() {
+            Some('"') => {
+                // End of string - remaining is what's left after consuming the quote
+                return Ok((
+                    char_iter.as_str(),
+                    Value::String(chars.into_iter().collect()),
+                ));
+            }
+            Some('\\') => {
+                // Handle escape sequences
+                match char_iter.next() {
+                    Some('n') => chars.push('\n'),
+                    Some('t') => chars.push('\t'),
+                    Some('r') => chars.push('\r'),
+                    Some('\\') => chars.push('\\'),
+                    Some('"') => chars.push('"'),
+                    Some(_) => {
                         // Unknown escape sequence - return error
                         return Err(nom::Err::Error(nom::error::Error::new(
                             remaining,
                             nom::error::ErrorKind::Char,
                         )));
                     }
-                };
-                chars.push(escaped_char);
-                remaining = &remaining[2..];
-            } else {
+                    None => {
+                        // Incomplete escape sequence (backslash at end)
+                        return Err(nom::Err::Error(nom::error::Error::new(
+                            remaining,
+                            nom::error::ErrorKind::Char,
+                        )));
+                    }
+                }
+                // After consuming escape sequence, remaining is what the iterator has left
+                remaining = char_iter.as_str();
+            }
+            Some(ch) => {
+                // Regular character
+                chars.push(ch);
+                remaining = char_iter.as_str();
+            }
+            None => {
+                // Reached end of input without finding closing quote
                 return Err(nom::Err::Error(nom::error::Error::new(
                     remaining,
                     nom::error::ErrorKind::Char,
                 )));
             }
-        } else {
-            chars.push(ch);
-            remaining = &remaining[ch.len_utf8()..];
         }
     }
-
-    // If we get here, we reached end of input without finding closing quote
-    // This is the improved error handling that should be preserved
-    Err(nom::Err::Error(nom::error::Error::new(
-        remaining,
-        nom::error::ErrorKind::Char,
-    )))
 }
 
 /// Parse a list with configurable precompilation behavior (performance optimized)
@@ -219,17 +223,15 @@ fn parse_list(
 
     // Apply precompilation if enabled - single lookup, no repeated string comparison
     if should_precompile == ShouldPrecompileOps::Yes
-        && !elements.is_empty()
-        && let Value::Symbol(op_name) = &elements[0]
+        && let [Value::Symbol(op_name), args @ ..] = elements.as_slice()
         && let Some(builtin_op) = find_scheme_op(op_name.as_str())
     {
-        let args = elements[1..].to_vec();
         return Ok((
             input,
             Value::PrecompiledOp {
                 op: builtin_op,
                 op_id: builtin_op.scheme_id.into(),
-                args,
+                args: args.to_vec(),
             },
         ));
     }
@@ -297,8 +299,7 @@ pub fn parse_scheme(input: &str) -> Result<Value, SchemeError> {
             Ok(value)
         }
         Ok((remaining, _)) => Err(SchemeError::ParseError(format!(
-            "Unexpected remaining input: '{}'",
-            remaining
+            "Unexpected remaining input: '{remaining}'"
         ))),
         Err(e) => Err(SchemeError::ParseError(parse_error_to_message(input, e))),
     }
@@ -335,6 +336,7 @@ fn validate_arity_in_ast(value: &Value) -> Result<(), SchemeError> {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)] // test code OK
 mod tests {
     use super::*;
     use crate::ast::{nil, sym, val};
@@ -374,45 +376,37 @@ mod tests {
             match (result, expected) {
                 // Success cases with round-trip testing
                 (Ok(actual), Success(expected_val)) => {
-                    assert_eq!(actual, *expected_val, "{}: value mismatch", test_id);
+                    assert_eq!(actual, *expected_val, "{test_id}: value mismatch");
 
                     // Test round-trip: display -> parse -> display should be identical
-                    let displayed = format!("{}", actual);
+                    let displayed = format!("{actual}");
                     let reparsed = parse_scheme(&displayed).unwrap_or_else(|e| {
-                        panic!(
-                            "{}: round-trip parse failed for '{}': {:?}",
-                            test_id, displayed, e
-                        )
+                        panic!("{test_id}: round-trip parse failed for '{displayed}': {e:?}")
                     });
-                    let redisplayed = format!("{}", reparsed);
+                    let redisplayed = format!("{reparsed}");
                     assert_eq!(
                         displayed, redisplayed,
-                        "{}: round-trip display mismatch for '{}'",
-                        test_id, input
+                        "{test_id}: round-trip display mismatch for '{input}'"
                     );
                 }
 
                 (Ok(actual), SuccessPrecompiledOp(expected_scheme_id, expected_args)) => {
                     if let Value::PrecompiledOp { op_id, args, .. } = &actual {
-                        assert_eq!(op_id, expected_scheme_id, "{}: scheme_id mismatch", test_id);
-                        assert_eq!(args, expected_args, "{}: args mismatch", test_id);
+                        assert_eq!(op_id, expected_scheme_id, "{test_id}: scheme_id mismatch");
+                        assert_eq!(args, expected_args, "{test_id}: args mismatch");
 
                         // Test round-trip for PrecompiledOp
-                        let displayed = format!("{}", actual);
+                        let displayed = format!("{actual}");
                         let reparsed = parse_scheme(&displayed).unwrap_or_else(|e| {
-                            panic!(
-                                "{}: round-trip parse failed for '{}': {:?}",
-                                test_id, displayed, e
-                            )
+                            panic!("{test_id}: round-trip parse failed for '{displayed}': {e:?}")
                         });
-                        let redisplayed = format!("{}", reparsed);
+                        let redisplayed = format!("{reparsed}");
                         assert_eq!(
                             displayed, redisplayed,
-                            "{}: round-trip display mismatch for '{}'",
-                            test_id, input
+                            "{test_id}: round-trip display mismatch for '{input}'"
                         );
                     } else {
-                        panic!("{}: expected PrecompiledOp, got {:?}", test_id, actual);
+                        panic!("{test_id}: expected PrecompiledOp, got {actual:?}");
                     }
                 }
 
@@ -422,66 +416,55 @@ mod tests {
                     let actual_uncompiled = actual.to_uncompiled_form();
                     assert_eq!(
                         actual_uncompiled, *expected_val,
-                        "{}: semantic equivalence mismatch",
-                        test_id
+                        "{test_id}: semantic equivalence mismatch"
                     );
 
                     // Test round-trip for SemanticallyEquivalent
-                    let displayed = format!("{}", actual);
+                    let displayed = format!("{actual}");
                     let reparsed = parse_scheme(&displayed).unwrap_or_else(|e| {
-                        panic!(
-                            "{}: round-trip parse failed for '{}': {:?}",
-                            test_id, displayed, e
-                        )
+                        panic!("{test_id}: round-trip parse failed for '{displayed}': {e:?}")
                     });
-                    let redisplayed = format!("{}", reparsed);
+                    let redisplayed = format!("{reparsed}");
                     assert_eq!(
                         displayed, redisplayed,
-                        "{}: round-trip display mismatch for '{}'",
-                        test_id, input
+                        "{test_id}: round-trip display mismatch for '{input}'"
                     );
                 }
 
                 // Error cases (success)
                 (Err(_), Error) => {} // Generic error case passes
                 (Err(err), SpecificError(expected_text)) => {
-                    let error_msg = format!("{:?}", err);
+                    let error_msg = format!("{err:?}");
                     assert!(
                         error_msg.contains(expected_text),
-                        "{}: error should contain '{}'",
-                        test_id,
-                        expected_text
+                        "{test_id}: error should contain '{expected_text}'"
                     );
                 }
 
                 // Mismatched cases (failures)
                 (Ok(actual), Error) => {
-                    panic!("{}: expected error, got {:?}", test_id, actual);
+                    panic!("{test_id}: expected error, got {actual:?}");
                 }
                 (Ok(actual), SpecificError(expected_text)) => {
                     panic!(
-                        "{}: expected error containing '{}', got {:?}",
-                        test_id, expected_text, actual
+                        "{test_id}: expected error containing '{expected_text}', got {actual:?}"
                     );
                 }
                 (Err(err), Success(_)) => {
-                    panic!("{}: expected success, got error {:?}", test_id, err);
+                    panic!("{test_id}: expected success, got error {err:?}");
                 }
                 (Err(err), SuccessPrecompiledOp(_, _)) => {
-                    panic!("{}: expected PrecompiledOp, got error {:?}", test_id, err);
+                    panic!("{test_id}: expected PrecompiledOp, got error {err:?}");
                 }
                 (Err(err), SemanticallyEquivalent(_)) => {
-                    panic!(
-                        "{}: expected SemanticallyEquivalent, got error {:?}",
-                        test_id, err
-                    );
+                    panic!("{test_id}: expected SemanticallyEquivalent, got error {err:?}");
                 }
             }
         }
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
+    #[expect(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
     fn test_parser_comprehensive() {
         use crate::builtinops::find_scheme_op;
 

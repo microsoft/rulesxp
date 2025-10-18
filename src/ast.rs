@@ -14,35 +14,35 @@ use crate::builtinops::BuiltinOp;
 pub type NumberType = i64;
 
 /// Allowed non-alphanumeric characters in Scheme symbol names
-/// Most represent mathematical symbols or predicates ("?"), "$" supported for JavaScript identifiers   
+/// Most represent mathematical symbols or predicates ("?"), "$" supported for JavaScript identifiers
 pub const SYMBOL_SPECIAL_CHARS: &str = "+-*/<>=!?_$";
 
 /// Check if a string is a valid Scheme symbol name
 /// Valid: non-empty, no leading digit, no "-digit" prefix, alphanumeric + SYMBOL_SPECIAL_CHARS
 /// Note: This function is tested as part of the parser tests in parser.rs
 pub(crate) fn is_valid_symbol(name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-
     let mut chars = name.chars();
-    let first_char = chars.next().unwrap();
 
-    // Check first character restrictions
-    if first_char.is_ascii_digit() {
-        return false;
+    match chars.next() {
+        None => false, // name is empty
+        Some(first_char) => {
+            if first_char.is_ascii_digit() {
+                return false;
+            }
+
+            if first_char == '-'
+                && let Some(second_char) = chars.next()
+                && second_char.is_ascii_digit()
+            {
+                return false;
+            }
+
+            // Check all characters are valid
+            // The first character is checked here again, but it's a cheap operation.
+            name.chars()
+                .all(|c| c.is_alphanumeric() || SYMBOL_SPECIAL_CHARS.contains(c))
+        }
     }
-
-    if first_char == '-'
-        && let Some(second_char) = chars.next()
-        && second_char.is_ascii_digit()
-    {
-        return false;
-    }
-
-    // Check all characters are valid
-    name.chars()
-        .all(|c| c.is_alphanumeric() || SYMBOL_SPECIAL_CHARS.contains(c))
 }
 
 /// Core AST type in our Scheme interpreter
@@ -93,7 +93,7 @@ pub enum Value {
 // From trait implementations for Value - enables .into() conversion
 impl From<&str> for Value {
     fn from(s: &str) -> Self {
-        Value::String(s.to_string())
+        Value::String(s.to_owned())
     }
 }
 
@@ -150,7 +150,7 @@ impl<T: Into<Value> + Clone> From<&[T]> for Value {
 ///   Accepts both &str and String via Into<&str>
 #[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn sym<S: AsRef<str>>(name: S) -> Value {
-    Value::Symbol(name.as_ref().to_string())
+    Value::Symbol(name.as_ref().to_owned())
 }
 
 /// Helper function for creating Values - works great in mixed lists!
@@ -170,8 +170,8 @@ pub(crate) fn nil() -> Value {
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Number(n) => write!(f, "{}", n),
-            Value::Symbol(s) => write!(f, "{}", s),
+            Value::Number(n) => write!(f, "{n}"),
+            Value::Symbol(s) => write!(f, "{s}"),
             Value::String(s) => {
                 write!(f, "\"")?;
                 for ch in s.chars() {
@@ -181,7 +181,7 @@ impl std::fmt::Display for Value {
                         '\n' => write!(f, "\\n")?,
                         '\t' => write!(f, "\\t")?,
                         '\r' => write!(f, "\\r")?,
-                        c => write!(f, "{}", c)?,
+                        c => write!(f, "{c}")?,
                     }
                 }
                 write!(f, "\"")
@@ -193,11 +193,11 @@ impl std::fmt::Display for Value {
                     if i > 0 {
                         write!(f, " ")?;
                     }
-                    write!(f, "{}", elem)?;
+                    write!(f, "{elem}")?;
                 }
                 write!(f, ")")
             }
-            Value::BuiltinFunction { id, .. } => write!(f, "#<builtin-function:{}>", id),
+            Value::BuiltinFunction { id, .. } => write!(f, "#<builtin-function:{id}>"),
             Value::PrecompiledOp { .. } => {
                 // Display PrecompiledOp as parseable list form for round-trip compatibility
                 write!(f, "{}", self.to_uncompiled_form())
@@ -213,7 +213,7 @@ impl Value {
     pub(crate) fn to_uncompiled_form(&self) -> Value {
         match self {
             Value::PrecompiledOp { op, args, .. } => {
-                let mut elements = vec![Value::Symbol(op.scheme_id.to_string())];
+                let mut elements = vec![Value::Symbol(op.scheme_id.to_owned())];
                 for arg in args {
                     elements.push(arg.to_uncompiled_form()); // Recursively convert nested PrecompiledOps
                 }
@@ -277,9 +277,8 @@ impl PartialEq for Value {
                     env: e2,
                 },
             ) => p1 == p2 && b1 == b2 && e1 == e2,
-            (Value::Unspecified, _) => false, // Unspecified never equals anything
-            (_, Value::Unspecified) => false, // Nothing equals Unspecified
-            _ => false,                       // Different variants are never equal
+            (Value::Unspecified, _) | (_, Value::Unspecified) => false, // Unspecified never equals anything
+            _ => false, // Different variants are never equal
         }
     }
 }
@@ -307,12 +306,12 @@ mod helper_function_tests {
             (val(NumberType::MIN), Value::Number(NumberType::MIN)),
             // Basic booleans
             (val(true), Value::Bool(true)),
-            (val("hello"), Value::String("hello".to_string())),
+            (val("hello"), Value::String("hello".to_owned())),
             (val(""), Value::String(String::new())),
             // Sym, from both &str and String
-            (sym("foo-bar?"), Value::Symbol("foo-bar?".to_string())),
-            (sym("-"), Value::Symbol("-".to_string())),
-            (sym(String::from("test")), Value::Symbol("test".to_string())),
+            (sym("foo-bar?"), Value::Symbol("foo-bar?".to_owned())),
+            (sym("-"), Value::Symbol("-".to_owned())),
+            (sym(String::from("test")), Value::Symbol("test".to_owned())),
             // Empty list (nil)
             (nil(), Value::List(vec![])),
             // Lists from arrays and vecs of primitives
@@ -323,8 +322,8 @@ mod helper_function_tests {
             (
                 val(["hello", "world"]),
                 Value::List(vec![
-                    Value::String("hello".to_string()),
-                    Value::String("world".to_string()),
+                    Value::String("hello".to_owned()),
+                    Value::String("world".to_owned()),
                 ]),
             ),
             (
@@ -339,9 +338,9 @@ mod helper_function_tests {
             (
                 val(vec![sym("operation"), val(42), val("result"), val(true)]),
                 Value::List(vec![
-                    Value::Symbol("operation".to_string()),
+                    Value::Symbol("operation".to_owned()),
                     Value::Number(42),
-                    Value::String("result".to_string()),
+                    Value::String("result".to_owned()),
                     Value::Bool(true),
                 ]),
             ),
@@ -353,14 +352,13 @@ mod helper_function_tests {
     /// Helper function to run data-driven tests for helper functions
     fn run_helper_function_tests(test_cases: Vec<(Value, Value)>) {
         for (i, (actual, expected)) in test_cases.iter().enumerate() {
-            if actual != expected {
-                panic!(
-                    "Test case {} failed:\n  Expected: {:?}\n  Got: {:?}",
-                    i + 1,
-                    expected,
-                    actual
-                );
-            }
+            assert!(
+                !(actual != expected),
+                "Test case {} failed:\n  Expected: {:?}\n  Got: {:?}",
+                i + 1,
+                expected,
+                actual
+            );
         }
     }
 

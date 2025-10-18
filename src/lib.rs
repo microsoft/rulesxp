@@ -92,10 +92,10 @@ impl SchemeError {
 impl fmt::Display for SchemeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            SchemeError::ParseError(msg) => write!(f, "Parse error: {}", msg),
-            SchemeError::EvalError(msg) => write!(f, "Evaluation error: {}", msg),
-            SchemeError::TypeError(msg) => write!(f, "Type error: {}", msg),
-            SchemeError::UnboundVariable(var) => write!(f, "Unbound variable: {}", var),
+            SchemeError::ParseError(msg) => write!(f, "Parse error: {msg}"),
+            SchemeError::EvalError(msg) => write!(f, "Evaluation error: {msg}"),
+            SchemeError::TypeError(msg) => write!(f, "Type error: {msg}"),
+            SchemeError::UnboundVariable(var) => write!(f, "Unbound variable: {var}"),
             SchemeError::ArityError {
                 expected,
                 got,
@@ -103,14 +103,9 @@ impl fmt::Display for SchemeError {
             } => match expression {
                 Some(expr) => write!(
                     f,
-                    "Arity error in expression {}: expected {} arguments, got {}",
-                    expr, expected, got
+                    "Arity error in expression {expr}: expected {expected} arguments, got {got}"
                 ),
-                None => write!(
-                    f,
-                    "Arity error: expected {} arguments, got {}",
-                    expected, got
-                ),
+                None => write!(f, "Arity error: expected {expected} arguments, got {got}"),
             },
         }
     }

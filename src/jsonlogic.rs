@@ -19,7 +19,7 @@ enum CompilationContext {
 /// Parse JSONLogic expression into AST value for evaluation
 pub fn parse_jsonlogic(input: &str) -> Result<Value, SchemeError> {
     let json_value: serde_json::Value = serde_json::from_str(input)
-        .map_err(|e| SchemeError::ParseError(format!("Invalid JSON: {}", e)))?;
+        .map_err(|e| SchemeError::ParseError(format!("Invalid JSON: {e}")))?;
 
     compile_json_to_ast(json_value)
 }
@@ -36,8 +36,7 @@ fn compile_json_to_ast_with_context(
 ) -> Result<Value, SchemeError> {
     if depth >= MAX_PARSE_DEPTH {
         return Err(SchemeError::ParseError(format!(
-            "JSONLogic expression too deeply nested (max depth: {})",
-            MAX_PARSE_DEPTH
+            "JSONLogic expression too deeply nested (max depth: {MAX_PARSE_DEPTH})"
         )));
     }
     match json {
@@ -51,8 +50,7 @@ fn compile_json_to_ast_with_context(
                 Ok(Value::Number(i))
             } else {
                 Err(SchemeError::ParseError(format!(
-                    "Number too large or not integer: {}",
-                    n
+                    "Number too large or not integer: {n}"
                 )))
             }
         }
@@ -87,13 +85,18 @@ fn compile_json_to_ast_with_context(
             }
         }
         serde_json::Value::Object(obj) => {
-            if obj.len() != 1 {
-                return Err(SchemeError::ParseError(
-                    "JSONLogic operations must have exactly one operator".into(),
-                ));
-            }
-
-            let (operator, operands) = obj.into_iter().next().unwrap();
+            let (operator, operands) = {
+                let mut iter = obj.into_iter();
+                // Attempt to get two elements from this object - hoping to get only 1 item back
+                match (iter.next(), iter.next()) {
+                    (Some((op, val)), None) => (op, val), // Exactly one item
+                    _ => {
+                        return Err(SchemeError::ParseError(
+                            "JSONLogic operations must have exactly one operator".into(),
+                        ));
+                    }
+                }
+            };
 
             match context {
                 CompilationContext::Quote => {
@@ -112,8 +115,7 @@ fn compile_json_to_ast_with_context(
                     } else {
                         // Reject all other object form operations in quote context
                         Err(SchemeError::ParseError(format!(
-                            "Object form operations like '{{\"{}\":...}}' are not allowed in quote context. Use list form like '[\"{}\", ...]' instead",
-                            operator, operator
+                            "Object form operations like '{{\"{operator}\":...}}' are not allowed in quote context. Use list form like '[\"{operator}\", ...]' instead"
                         )))
                     }
                 }
@@ -215,12 +217,12 @@ fn compile_jsonlogic_operation(
         "scheme-quote" => {
             // Quote must have exactly one operand and must NOT compile/evaluate it
             let operand = match operands {
-                serde_json::Value::Array(mut arr) => {
-                    if arr.len() != 1 {
+                serde_json::Value::Array(arr) => match arr.as_slice() {
+                    [single_operand] => single_operand.clone(),
+                    _ => {
                         return Err(SchemeError::ParseError("quote requires one operand".into()));
                     }
-                    arr.pop().unwrap()
-                }
+                },
                 single_operand => single_operand, // Single operand without array wrapper
             };
 
@@ -254,16 +256,14 @@ fn compile_jsonlogic_operation(
                 // If so, reject it to prevent accidental access to Scheme symbols via JSONLogic
                 if find_scheme_op(operator).is_some() {
                     Err(SchemeError::ParseError(format!(
-                        "JSONLogic operator '{}' is not supported. Use the JSONLogic equivalent instead (e.g., use '!' instead of 'not').",
-                        operator
+                        "JSONLogic operator '{operator}' is not supported. Use the JSONLogic equivalent instead (e.g., use '!' instead of 'not')."
                     )))
                 } else {
                     // Operation not in registry and not a Scheme builtin - emit as regular list for custom operations
                     // But first validate that the operator name is a valid symbol
                     if !is_valid_symbol(operator) {
                         return Err(SchemeError::ParseError(format!(
-                            "Invalid operator name: '{}'",
-                            operator
+                            "Invalid operator name: '{operator}'"
                         )));
                     }
                     let args = extract_operand_list(operands)?;
@@ -280,7 +280,7 @@ fn compile_jsonlogic_operation(
 pub fn ast_to_jsonlogic(value: &Value) -> Result<String, SchemeError> {
     let json_value = ast_to_json_value(value)?;
     serde_json::to_string(&json_value)
-        .map_err(|e| SchemeError::EvalError(format!("Failed to serialize JSON: {}", e)))
+        .map_err(|e| SchemeError::EvalError(format!("Failed to serialize JSON: {e}")))
 }
 
 /// Convert an AST value to serde_json::Value for JSONLogic output
@@ -307,18 +307,18 @@ fn ast_to_json_value_with_context(
                     .map(|v| ast_to_json_value_with_context(v, true))
                     .collect();
                 Ok(serde_json::Value::Array(converted?))
-            } else if let Some(Value::Symbol(op)) = list.first() {
+            } else if let [Value::Symbol(op), args @ ..] = list.as_slice() {
                 let args: Result<Vec<serde_json::Value>, SchemeError> =
-                    list[1..].iter().map(ast_to_json_value).collect();
+                    args.iter().map(ast_to_json_value).collect();
                 let args = args?;
 
-                if op == "list" {
-                    Ok(serde_json::Value::Array(args))
-                } else {
-                    let jsonlogic_op = find_scheme_op(op)
-                        .map(|builtin_op| builtin_op.jsonlogic_id)
-                        .unwrap_or(op);
-                    Ok(serde_json::json!({jsonlogic_op: args}))
+                match op.as_str() {
+                    "list" => Ok(serde_json::Value::Array(args)),
+                    _ => {
+                        let jsonlogic_op = find_scheme_op(op)
+                            .map_or(op.as_str(), |builtin_op| builtin_op.jsonlogic_id);
+                        Ok(serde_json::json!({jsonlogic_op: args}))
+                    }
                 }
             } else {
                 let converted: Result<Vec<serde_json::Value>, SchemeError> =
@@ -336,36 +336,39 @@ fn ast_to_json_value_with_context(
                 ));
             }
 
-            if op.scheme_id == "list" {
-                let converted: Result<Vec<serde_json::Value>, SchemeError> =
-                    args.iter().map(ast_to_json_value).collect();
-                return Ok(serde_json::Value::Array(converted?));
-            }
-
-            if op.jsonlogic_id == "scheme-quote" {
-                if args.len() != 1 {
-                    return Err(SchemeError::EvalError(
-                        "Quote needs one argument".to_string(),
-                    ));
+            match op.scheme_id {
+                "list" => {
+                    let converted: Result<Vec<serde_json::Value>, SchemeError> =
+                        args.iter().map(ast_to_json_value).collect();
+                    Ok(serde_json::Value::Array(converted?))
                 }
-                let quoted_content = ast_to_json_value_with_context(&args[0], true)?;
-                return Ok(serde_json::json!({"scheme-quote": [quoted_content]}));
+                "quote" => match args.as_slice() {
+                    [single_arg] => {
+                        let quoted_content = ast_to_json_value_with_context(single_arg, true)?;
+                        Ok(serde_json::json!({"scheme-quote": [quoted_content]}))
+                    }
+                    _ => Err(SchemeError::EvalError(
+                        "Quote needs one argument".to_owned(),
+                    )),
+                },
+                _ => {
+                    let converted_args: Result<Vec<serde_json::Value>, SchemeError> =
+                        args.iter().map(ast_to_json_value).collect();
+                    Ok(serde_json::json!({op.jsonlogic_id: converted_args?}))
+                }
             }
-
-            let converted_args: Result<Vec<serde_json::Value>, SchemeError> =
-                args.iter().map(ast_to_json_value).collect();
-            Ok(serde_json::json!({op.jsonlogic_id: converted_args?}))
         }
         Value::Function { .. } => Err(SchemeError::EvalError(
-            "Cannot convert user function".to_string(),
+            "Cannot convert user function".to_owned(),
         )),
         Value::Unspecified => Err(SchemeError::EvalError(
-            "Cannot convert unspecified value".to_string(),
+            "Cannot convert unspecified value".to_owned(),
         )),
     }
 }
 
 #[cfg(all(test, feature = "scheme"))]
+#[expect(clippy::unwrap_used)] // test code OK
 mod tests {
     use core::panic;
 
@@ -384,7 +387,7 @@ mod tests {
     use TestResult::*;
 
     #[test]
-    #[allow(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
+    #[expect(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
     fn test_jsonlogic_to_scheme_equivalence() {
         // Test cases as tuples: (jsonlogic, scheme_equivalent)
         let test_cases = vec![
@@ -786,18 +789,14 @@ mod tests {
         let roundtrip_json: serde_json::Value = serde_json::from_str(&back_to_json).unwrap();
         assert_eq!(
             roundtrip_json, original_json,
-            "Roundtrip failed: {} -> {} (expected {})",
-            jsonlogic, back_to_json, jsonlogic
+            "Roundtrip failed: {jsonlogic} -> {back_to_json} (expected {jsonlogic})"
         );
     }
 
     /// Helper function to run data-driven tests
     fn run_data_driven_tests(test_cases: &[(&str, TestResult)]) {
         for (jsonlogic, expected_result) in test_cases {
-            println!(
-                "Testing JSONLogic: {}, expected: {:?}",
-                jsonlogic, expected_result
-            );
+            println!("Testing JSONLogic: {jsonlogic}, expected: {expected_result:?}");
 
             match (parse_jsonlogic(jsonlogic), expected_result) {
                 (Ok(jsonlogic_ast), Identical(expected_scheme)) => {
@@ -842,12 +841,10 @@ mod tests {
                     // Expected error
                 }
                 (Err(e), SpecificError(expected_error_text)) => {
-                    let error_msg = format!("{:?}", e);
+                    let error_msg = format!("{e:?}");
                     assert!(
                         error_msg.contains(expected_error_text),
-                        "Error message should contain '{}', but got: {}",
-                        expected_error_text,
-                        error_msg
+                        "Error message should contain '{expected_error_text}', but got: {error_msg}"
                     );
                 }
                 (Ok(_), SpecificError(expected_error_text)) => {

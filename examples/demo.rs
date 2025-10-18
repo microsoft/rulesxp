@@ -37,38 +37,35 @@ fn main() {
     ];
 
     for (scheme_expr, jsonlogic_expr, description) in test_cases {
-        println!("--- {} ---", description);
-        println!("Scheme:    {}", scheme_expr);
-        println!("JSONLogic: {}", jsonlogic_expr);
+        println!("--- {description} ---");
+        println!("Scheme:    {scheme_expr}");
+        println!("JSONLogic: {jsonlogic_expr}");
 
         // Parse and evaluate Scheme
         let scheme_result = match parse_scheme(scheme_expr) {
             Ok(expr) => match evaluator::eval(&expr, &mut env.clone()) {
-                Ok(result) => format!("{}", result),
-                Err(e) => format!("Error: {}", e),
+                Ok(result) => format!("{result}"),
+                Err(e) => format!("Error: {e}"),
             },
-            Err(e) => format!("Parse Error: {}", e),
+            Err(e) => format!("Parse Error: {e}"),
         };
 
         // Parse and evaluate JSONLogic
         let jsonlogic_result = match parse_jsonlogic(jsonlogic_expr) {
             Ok(expr) => match evaluator::eval(&expr, &mut env.clone()) {
-                Ok(result) => format!("{}", result),
-                Err(e) => format!("Error: {}", e),
+                Ok(result) => format!("{result}"),
+                Err(e) => format!("Error: {e}"),
             },
-            Err(e) => format!("Parse Error: {}", e),
+            Err(e) => format!("Parse Error: {e}"),
         };
 
-        println!("Result:    {} (both languages)", scheme_result);
+        println!("Result:    {scheme_result} (both languages)");
 
         // Verify they match
         if scheme_result == jsonlogic_result {
             println!("✓ Results match!");
         } else {
-            println!(
-                "✗ Results differ: Scheme={}, JSONLogic={}",
-                scheme_result, jsonlogic_result
-            );
+            println!("✗ Results differ: Scheme={scheme_result}, JSONLogic={jsonlogic_result}");
         }
         println!();
     }

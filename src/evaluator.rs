@@ -50,8 +50,7 @@ fn eval_with_depth_tracking(
 ) -> Result<Value, SchemeError> {
     if depth >= MAX_EVAL_DEPTH {
         return Err(SchemeError::EvalError(format!(
-            "Evaluation depth limit exceeded (max: {})",
-            MAX_EVAL_DEPTH
+            "Evaluation depth limit exceeded (max: {MAX_EVAL_DEPTH})"
         )));
     }
     match expr {
@@ -101,13 +100,13 @@ fn eval_with_depth_tracking(
 
 /// Helper function to add expression context to errors
 fn add_context(error: SchemeError, expr: &Value) -> SchemeError {
-    let context = format!("while evaluating: {}", expr);
+    let context = format!("while evaluating: {expr}");
     match error {
         SchemeError::EvalError(msg) => {
-            SchemeError::EvalError(format!("{}\n  Context: {}", msg, context))
+            SchemeError::EvalError(format!("{msg}\n  Context: {context}"))
         }
         SchemeError::TypeError(msg) => {
-            SchemeError::TypeError(format!("{}\n  Context: {}", msg, context))
+            SchemeError::TypeError(format!("{msg}\n  Context: {context}"))
         }
         // Don't add context to parse errors, unbound variables, or arity errors (they have their own context)
         other => other,
@@ -144,7 +143,7 @@ fn eval_list(
     // Note: Dynamic calls (not PrecompiledOps) still need runtime arity checking
     match elements {
         [] => Err(SchemeError::EvalError(
-            "Cannot evaluate empty list".to_string(),
+            "Cannot evaluate empty list".to_owned(),
         )),
 
         // Function application: evaluate function expression, then apply to arguments
@@ -182,17 +181,16 @@ fn eval_list(
                     eval_with_depth_tracking(body, &mut new_env, depth + 1).map_err(|err| match err
                     {
                         SchemeError::EvalError(msg) => {
-                            SchemeError::EvalError(format!("{}\n  In lambda: {}", msg, body))
+                            SchemeError::EvalError(format!("{msg}\n  In lambda: {body}"))
                         }
                         SchemeError::TypeError(msg) => {
-                            SchemeError::TypeError(format!("{}\n  In lambda: {}", msg, body))
+                            SchemeError::TypeError(format!("{msg}\n  In lambda: {body}"))
                         }
                         other => other,
                     })
                 }
                 _ => Err(SchemeError::TypeError(format!(
-                    "Cannot apply non-function: {}",
-                    func
+                    "Cannot apply non-function: {func}"
                 ))),
             }
         }
@@ -220,11 +218,11 @@ pub(crate) fn eval_define(
     match args {
         [Value::Symbol(name), expr] => {
             let value = eval_with_depth_tracking(expr, env, depth + 1)?;
-            env.define(name.clone(), value.clone());
+            env.define(name.clone(), value);
             Ok(Value::Unspecified)
         }
         [_, _] => Err(SchemeError::TypeError(
-            "define requires a symbol".to_string(),
+            "define requires a symbol".to_owned(),
         )),
         _ => Err(SchemeError::arity_error(2, args.len())),
     }
@@ -243,7 +241,7 @@ pub(crate) fn eval_if(
                 Value::Bool(true) => eval_with_depth_tracking(then_expr, env, depth + 1),
                 Value::Bool(false) => eval_with_depth_tracking(else_expr, env, depth + 1),
                 _ => Err(SchemeError::TypeError(
-                    "SCHEME-JSONLOGIC-STRICT: if condition must be a boolean".to_string(),
+                    "SCHEME-JSONLOGIC-STRICT: if condition must be a boolean".to_owned(),
                 )),
             }
         }
@@ -266,15 +264,14 @@ pub(crate) fn eval_lambda(
                         // Check for duplicate parameter names (R7RS compliant)
                         if params.contains(name) {
                             return Err(SchemeError::EvalError(format!(
-                                "Duplicate parameter name: {}",
-                                name
+                                "Duplicate parameter name: {name}"
                             )));
                         }
                         params.push(name.clone());
                     }
                     _ => {
                         return Err(SchemeError::TypeError(
-                            "Lambda parameters must be symbols".to_string(),
+                            "Lambda parameters must be symbols".to_owned(),
                         ));
                     }
                 }
@@ -292,7 +289,7 @@ pub(crate) fn eval_lambda(
             })
         }
         [_, _] => Err(SchemeError::TypeError(
-            "Lambda parameters must be a list".to_string(),
+            "Lambda parameters must be a list".to_owned(),
         )),
         _ => Err(SchemeError::arity_error(2, args.len())),
     }
@@ -302,12 +299,13 @@ pub(crate) fn eval_lambda(
 /// This catches literals and some obvious cases, but can't check function call results
 fn is_obviously_non_boolean(value: &Value) -> bool {
     match value {
-        Value::Bool(_) => false,                               // Obviously boolean
-        Value::Number(_) | Value::String(_) => true,           // Obviously non-boolean
-        Value::List(_) | Value::PrecompiledOp { .. } => false, // Could be function calls that return booleans
-        Value::Symbol(_) => false,                             // Could be a boolean variable
-        Value::Unspecified => true,                            // Obviously non-boolean
-        Value::BuiltinFunction { .. } | Value::Function { .. } => false, // Functions could return booleans
+        Value::Number(_) | Value::String(_) | Value::Unspecified => true, // Obviously non-boolean
+        Value::Bool(_)
+        | Value::List(_)
+        | Value::PrecompiledOp { .. }
+        | Value::Symbol(_)
+        | Value::BuiltinFunction { .. }
+        | Value::Function { .. } => false, // Boolean, or could be function calls/variables that return booleans
     }
 }
 
@@ -370,13 +368,13 @@ pub fn create_global_env() -> Environment {
     let mut env = Environment::new();
 
     // Add all regular functions from the registry
-    for builtin_op in get_builtin_ops().iter() {
+    for builtin_op in get_builtin_ops() {
         if let crate::builtinops::OpKind::Function(func) = &builtin_op.op_kind {
             // Use BuiltinFunction for environment bindings (dynamic calls through symbols)
             env.define(
-                builtin_op.scheme_id.to_string(),
+                builtin_op.scheme_id.to_owned(),
                 Value::BuiltinFunction {
-                    id: builtin_op.scheme_id.to_string(),
+                    id: builtin_op.scheme_id.to_owned(),
                     func: *func,
                 },
             );
@@ -387,6 +385,7 @@ pub fn create_global_env() -> Environment {
 }
 
 #[cfg(all(test, feature = "scheme"))]
+#[expect(clippy::unwrap_used)] // test code OK
 mod tests {
     use super::*;
     use crate::ast::{nil, sym, val};
@@ -434,10 +433,7 @@ mod tests {
         let expr = match parse_scheme(input) {
             Ok(expr) => expr,
             Err(parse_err) => {
-                panic!(
-                    "{}: unexpected parse error for '{}': {:?}",
-                    test_id, input, parse_err
-                );
+                panic!("{test_id}: unexpected parse error for '{input}': {parse_err:?}");
             }
         };
 
@@ -447,37 +443,30 @@ mod tests {
                 match (&actual, expected_val) {
                     (Value::Unspecified, Value::Unspecified) => {} // Both unspecified - OK
                     _ => {
-                        if actual != *expected_val {
-                            panic!("{}: expected {:?}, got {:?}", test_id, expected_val, actual);
-                        }
+                        assert!(
+                            !(actual != *expected_val),
+                            "{test_id}: expected {expected_val:?}, got {actual:?}"
+                        );
                     }
                 }
             }
 
             (Err(_), Error) => {} // Expected generic error
             (Err(e), SpecificError(expected_text)) => {
-                let error_msg = format!("{}", e);
-                if !error_msg.contains(expected_text) {
-                    panic!(
-                        "{}: error should contain '{}', got: {}",
-                        test_id, expected_text, error_msg
-                    );
-                }
+                let error_msg = format!("{e}");
+                assert!(
+                    error_msg.contains(expected_text),
+                    "{test_id}: error should contain '{expected_text}', got: {error_msg}"
+                );
             }
             (Ok(actual), Error) => {
-                panic!("{}: expected error, got {:?}", test_id, actual);
+                panic!("{test_id}: expected error, got {actual:?}");
             }
             (Ok(actual), SpecificError(expected_text)) => {
-                panic!(
-                    "{}: expected error containing '{}', got {:?}",
-                    test_id, expected_text, actual
-                );
+                panic!("{test_id}: expected error containing '{expected_text}', got {actual:?}");
             }
             (Err(err), EvalResult(expected_val)) => {
-                panic!(
-                    "{}: expected {:?}, got error {:?}",
-                    test_id, expected_val, err
-                );
+                panic!("{test_id}: expected {expected_val:?}, got error {err:?}");
             }
         }
     }
@@ -492,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
+    #[expect(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
     fn test_comprehensive_operations_data_driven() {
         let test_cases = vec![
             // === SELF-EVALUATING FORMS ===

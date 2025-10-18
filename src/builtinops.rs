@@ -85,8 +85,7 @@ impl Arity {
         } else {
             Err(SchemeError::ArityError {
                 expected: match self {
-                    Arity::Exact(n) => *n,
-                    Arity::AtLeast(n) => *n,
+                    Arity::Exact(n) | Arity::AtLeast(n) => *n,
                     Arity::Range(min, _) => *min,
                     Arity::Any => 0,
                 },
@@ -290,7 +289,7 @@ fn builtin_cons(args: &[Value]) -> Result<Value, SchemeError> {
         }
         [_, _] => Err(SchemeError::TypeError(
             // SCHEME-STRICT: Require second argument to be a list (Scheme R7RS allows improper lists)
-            "cons requires a list as second argument".to_string(),
+            "cons requires a list as second argument".to_owned(),
         )),
         _ => Err(SchemeError::arity_error(2, args.len())),
     }
@@ -334,7 +333,7 @@ fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
                 _ => {
                     // Different types or non-comparable types - reject type coercion
                     Err(SchemeError::TypeError(
-                        "JSONLOGIC-STRICT: Equality comparison requires arguments of the same comparable type (no type coercion)".to_string(),
+                        "JSONLOGIC-STRICT: Equality comparison requires arguments of the same comparable type (no type coercion)".to_owned(),
                     ))
                 }
             }
@@ -386,7 +385,7 @@ fn builtin_error(args: &[Value]) -> Result<Value, SchemeError> {
     fn value_to_error_string(value: &Value) -> String {
         match value {
             Value::String(s) => s.clone(), // Remove quotes for error messages
-            _ => format!("{}", value),     // Use Display trait for everything else
+            _ => format!("{value}"),       // Use Display trait for everything else
         }
     }
 
@@ -609,6 +608,7 @@ pub(crate) fn get_list_op() -> &'static BuiltinOp {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)] // test code OK
 mod tests {
     use super::*;
     use crate::ast::{nil, val};
@@ -702,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
+    #[expect(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
     fn test_builtin_function_implementations() {
         type TestCase = (&'static str, Result<Value, SchemeError>, Option<Value>);
 
@@ -838,7 +838,7 @@ mod tests {
             test!(builtin_cdr(&[val([1, 2])]), success([2])),       // Two elements
             // Test cdr error cases
             test!(builtin_cdr(&[]), None), // No args
-            test!(builtin_cdr(&[int_list.clone(), int_list.clone()]), None), // Too many args
+            test!(builtin_cdr(&[int_list.clone(), int_list]), None), // Too many args
             test!(builtin_cdr(&[nil()]), None), // Empty list
             test!(builtin_cdr(&[val(true)]), None), // Not a list
             // Test list functions - cons
@@ -1037,7 +1037,7 @@ mod tests {
         for (test_expr, result, expected) in test_cases {
             match (result, expected) {
                 (Ok(actual), Some(expected_val)) => {
-                    assert_eq!(actual, expected_val, "Failed for test case: {}", test_expr);
+                    assert_eq!(actual, expected_val, "Failed for test case: {test_expr}");
                 }
                 (Err(_), None) => {} // Expected error
                 (actual, expected) => panic!(
@@ -1068,9 +1068,9 @@ mod tests {
         for (args, expected_msg) in test_cases {
             match builtin_error(&args).unwrap_err() {
                 SchemeError::EvalError(msg) => {
-                    assert_eq!(msg, expected_msg, "Failed for args: {:?}", args);
+                    assert_eq!(msg, expected_msg, "Failed for args: {args:?}");
                 }
-                _ => panic!("Expected EvalError for args: {:?}", args),
+                _ => panic!("Expected EvalError for args: {args:?}"),
             }
         }
     }
