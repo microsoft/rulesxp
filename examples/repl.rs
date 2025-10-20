@@ -1,3 +1,4 @@
+use rulesxp::Error;
 use rulesxp::ast::Value;
 use rulesxp::evaluator;
 use rulesxp::jsonlogic::{ast_to_jsonlogic, parse_jsonlogic};
@@ -37,6 +38,10 @@ fn run_repl() {
 
     let mut rl = DefaultEditor::new().expect("Could not initialize REPL");
     let mut env = evaluator::create_global_env();
+
+    // Register custom function that can be called from user code for demonstration purposes
+    env.register_builtin_function("help", print_help);
+
     let mut jsonlogic_mode = false;
 
     loop {
@@ -53,7 +58,7 @@ fn run_repl() {
                 // Handle special commands
                 match line {
                     ":help" => {
-                        print_help();
+                        _ = print_help(&[]).is_ok();
                         continue;
                     }
                     ":env" => {
@@ -139,7 +144,11 @@ fn run_repl() {
     }
 }
 
-fn print_help() {
+fn print_help(args: &[Value]) -> Result<Value, Error> {
+    if !args.is_empty() {
+        return Err(Error::arity_error(0, args.len()));
+    }
+
     println!("Mini Scheme Interpreter with JSONLogic Support:");
     println!("  :help      - Show this help message");
     println!("  :env       - Show current environment bindings");
@@ -171,6 +180,8 @@ fn print_help() {
     println!("  (and #t (> 5 3))");
     println!("  {{\"and\": [true, {{\">\":[5,3]}}]}}");
     println!();
+
+    Ok(Value::Unspecified)
 }
 
 fn print_environment(env: &rulesxp::evaluator::Environment) {

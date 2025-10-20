@@ -36,6 +36,41 @@ impl Environment {
             .or_else(|| self.parent.as_ref().and_then(|parent| parent.get(name)))
     }
 
+    /// Register a custom builtin function in the environment for use by Scheme/JSONLogic.
+    ///
+    /// # Arguments
+    /// * `name` - The name by which the function can be called
+    /// * `func` - A function pointer that takes a slice of Values and returns a Result
+    ///
+    /// # Example
+    /// ```
+    /// use rulesxp::evaluator::{Environment, create_global_env};
+    /// use rulesxp::ast::Value;
+    /// use rulesxp::Error;
+    ///
+    /// fn my_custom_function(args: &[Value]) -> Result<Value, Error> {
+    ///     println!("Custom function called with {} args", args.len());
+    ///     Ok(Value::Unspecified)
+    /// }
+    ///
+    /// let mut env = create_global_env();
+    /// env.register_builtin_function("my-func", my_custom_function);
+    /// // Now (my-func) can be called from evaluated expressions
+    /// ```
+    pub fn register_builtin_function(
+        &mut self,
+        name: &str,
+        func: fn(&[Value]) -> Result<Value, Error>,
+    ) {
+        self.bindings.insert(
+            name.to_string(),
+            Value::BuiltinFunction {
+                id: name.to_string(),
+                func,
+            },
+        );
+    }
+
     /// Get all bindings in this environment and its parents
     /// Returns a Vec of (name, value) pairs sorted by name
     pub fn get_all_bindings(&self) -> Vec<(String, Value)> {
