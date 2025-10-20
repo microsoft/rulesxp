@@ -1,5 +1,5 @@
+use crate::Error;
 use crate::MAX_EVAL_DEPTH;
-use crate::SchemeError;
 use crate::ast::Value;
 use crate::builtinops::get_builtin_ops;
 use std::collections::HashMap;
@@ -61,7 +61,7 @@ impl Environment {
 }
 
 /// Evaluate an S-expression (public API)
-pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, SchemeError> {
+pub fn eval(expr: &Value, env: &mut Environment) -> Result<Value, Error> {
     eval_with_depth_tracking(expr, env, 0)
 }
 
@@ -70,9 +70,9 @@ fn eval_with_depth_tracking(
     expr: &Value,
     env: &mut Environment,
     depth: usize,
-) -> Result<Value, SchemeError> {
+) -> Result<Value, Error> {
     if depth >= MAX_EVAL_DEPTH {
-        return Err(SchemeError::EvalError(format!(
+        return Err(Error::EvalError(format!(
             "Evaluation depth limit exceeded (max: {MAX_EVAL_DEPTH})"
         )));
     }
@@ -89,7 +89,7 @@ fn eval_with_depth_tracking(
         Value::Symbol(name) => env
             .get(name)
             .cloned()
-            .ok_or_else(|| SchemeError::UnboundVariable(name.clone())),
+            .ok_or_else(|| Error::UnboundVariable(name.clone())),
 
         // PrecompiledOp evaluation (optimized path for builtin operations and special forms)
         // This is where special forms are actually handled - they are converted to PrecompiledOps
@@ -122,26 +122,18 @@ fn eval_with_depth_tracking(
 }
 
 /// Helper function to add expression context to errors
-fn add_context(error: SchemeError, expr: &Value) -> SchemeError {
+fn add_context(error: Error, expr: &Value) -> Error {
     let context = format!("while evaluating: {expr}");
     match error {
-        SchemeError::EvalError(msg) => {
-            SchemeError::EvalError(format!("{msg}\n  Context: {context}"))
-        }
-        SchemeError::TypeError(msg) => {
-            SchemeError::TypeError(format!("{msg}\n  Context: {context}"))
-        }
+        Error::EvalError(msg) => Error::EvalError(format!("{msg}\n  Context: {context}")),
+        Error::TypeError(msg) => Error::TypeError(format!("{msg}\n  Context: {context}")),
         // Don't add context to parse errors, unbound variables, or arity errors (they have their own context)
         other => other,
     }
 }
 
 /// Helper function to evaluate a list of argument expressions with depth tracking
-fn eval_args(
-    args: &[Value],
-    env: &mut Environment,
-    depth: usize,
-) -> Result<Vec<Value>, SchemeError> {
+fn eval_args(args: &[Value], env: &mut Environment, depth: usize) -> Result<Vec<Value>, Error> {
     args.iter()
         .map(|arg| eval_with_depth_tracking(arg, env, depth + 1))
         .collect()
@@ -158,16 +150,10 @@ fn eval_args(
 /// If the PrecompiledOps optimization were removed, special forms would need
 /// special handling here. Builtin functions are added to the environment and
 /// can be called dynamically through normal symbol lookup and function application.
-fn eval_list(
-    elements: &[Value],
-    env: &mut Environment,
-    depth: usize,
-) -> Result<Value, SchemeError> {
+fn eval_list(elements: &[Value], env: &mut Environment, depth: usize) -> Result<Value, Error> {
     // Note: Dynamic calls (not PrecompiledOps) still need runtime arity checking
     match elements {
-        [] => Err(SchemeError::EvalError(
-            "Cannot evaluate empty list".to_owned(),
-        )),
+        [] => Err(Error::EvalError("Cannot evaluate empty list".to_owned())),
 
         // Function application: evaluate function expression, then apply to arguments
         // Note: If PrecompiledOps optimization were removed, we would need to check for
@@ -189,7 +175,7 @@ fn eval_list(
                     env: closure_env,
                 } => {
                     if params.len() != args.len() {
-                        return Err(SchemeError::arity_error(params.len(), args.len()));
+                        return Err(Error::arity_error(params.len(), args.len()));
                     }
 
                     // Create new environment with closure environment as parent
@@ -203,16 +189,16 @@ fn eval_list(
                     // Evaluate body with depth tracking and context
                     eval_with_depth_tracking(body, &mut new_env, depth + 1).map_err(|err| match err
                     {
-                        SchemeError::EvalError(msg) => {
-                            SchemeError::EvalError(format!("{msg}\n  In lambda: {body}"))
+                        Error::EvalError(msg) => {
+                            Error::EvalError(format!("{msg}\n  In lambda: {body}"))
                         }
-                        SchemeError::TypeError(msg) => {
-                            SchemeError::TypeError(format!("{msg}\n  In lambda: {body}"))
+                        Error::TypeError(msg) => {
+                            Error::TypeError(format!("{msg}\n  In lambda: {body}"))
                         }
                         other => other,
                     })
                 }
-                _ => Err(SchemeError::TypeError(format!(
+                _ => Err(Error::TypeError(format!(
                     "Cannot apply non-function: {func}"
                 ))),
             }
@@ -225,10 +211,10 @@ pub(crate) fn eval_quote(
     args: &[Value],
     _env: &mut Environment,
     _depth: usize,
-) -> Result<Value, SchemeError> {
+) -> Result<Value, Error> {
     match args {
         [expr] => Ok(expr.clone()), // Quote content is already unoptimized during parsing
-        _ => Err(SchemeError::arity_error(1, args.len())),
+        _ => Err(Error::arity_error(1, args.len())),
     }
 }
 
@@ -237,38 +223,32 @@ pub(crate) fn eval_define(
     args: &[Value],
     env: &mut Environment,
     depth: usize,
-) -> Result<Value, SchemeError> {
+) -> Result<Value, Error> {
     match args {
         [Value::Symbol(name), expr] => {
             let value = eval_with_depth_tracking(expr, env, depth + 1)?;
             env.define(name.clone(), value);
             Ok(Value::Unspecified)
         }
-        [_, _] => Err(SchemeError::TypeError(
-            "define requires a symbol".to_owned(),
-        )),
-        _ => Err(SchemeError::arity_error(2, args.len())),
+        [_, _] => Err(Error::TypeError("define requires a symbol".to_owned())),
+        _ => Err(Error::arity_error(2, args.len())),
     }
 }
 
 /// Evaluate if special form
-pub(crate) fn eval_if(
-    args: &[Value],
-    env: &mut Environment,
-    depth: usize,
-) -> Result<Value, SchemeError> {
+pub(crate) fn eval_if(args: &[Value], env: &mut Environment, depth: usize) -> Result<Value, Error> {
     match args {
         [condition_expr, then_expr, else_expr] => {
             let condition = eval_with_depth_tracking(condition_expr, env, depth + 1)?;
             match condition {
                 Value::Bool(true) => eval_with_depth_tracking(then_expr, env, depth + 1),
                 Value::Bool(false) => eval_with_depth_tracking(else_expr, env, depth + 1),
-                _ => Err(SchemeError::TypeError(
+                _ => Err(Error::TypeError(
                     "SCHEME-JSONLOGIC-STRICT: if condition must be a boolean".to_owned(),
                 )),
             }
         }
-        _ => Err(SchemeError::arity_error(3, args.len())),
+        _ => Err(Error::arity_error(3, args.len())),
     }
 }
 
@@ -277,7 +257,7 @@ pub(crate) fn eval_lambda(
     args: &[Value],
     env: &mut Environment,
     _depth: usize,
-) -> Result<Value, SchemeError> {
+) -> Result<Value, Error> {
     match args {
         [Value::List(param_list), body] => {
             let mut params = Vec::new();
@@ -286,14 +266,14 @@ pub(crate) fn eval_lambda(
                     Value::Symbol(name) => {
                         // Check for duplicate parameter names (R7RS compliant)
                         if params.contains(name) {
-                            return Err(SchemeError::EvalError(format!(
+                            return Err(Error::EvalError(format!(
                                 "Duplicate parameter name: {name}"
                             )));
                         }
                         params.push(name.clone());
                     }
                     _ => {
-                        return Err(SchemeError::TypeError(
+                        return Err(Error::TypeError(
                             "Lambda parameters must be symbols".to_owned(),
                         ));
                     }
@@ -311,10 +291,10 @@ pub(crate) fn eval_lambda(
                 env: env.clone(),
             })
         }
-        [_, _] => Err(SchemeError::TypeError(
+        [_, _] => Err(Error::TypeError(
             "Lambda parameters must be a list".to_owned(),
         )),
-        _ => Err(SchemeError::arity_error(2, args.len())),
+        _ => Err(Error::arity_error(2, args.len())),
     }
 }
 
@@ -338,16 +318,16 @@ macro_rules! boolean_logic_op {
             args: &[Value],
             env: &mut Environment,
             depth: usize,
-        ) -> Result<Value, SchemeError> {
+        ) -> Result<Value, Error> {
             // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns #t)
             if args.is_empty() {
-                return Err(SchemeError::arity_error(1, 0));
+                return Err(Error::arity_error(1, 0));
             }
 
             // First pass: check for obviously non-boolean arguments before evaluation, so that short-circuit evaluation doesn't hide gross errors
             for arg in args.iter() {
                 if is_obviously_non_boolean(arg) {
-                    return Err(SchemeError::TypeError(
+                    return Err(Error::TypeError(
                         concat!(
                             "SCHEME-JSONLOGIC-STRICT: '",
                             $op_name,
@@ -365,7 +345,7 @@ macro_rules! boolean_logic_op {
                     Value::Bool($short_circuit) => return Ok(Value::Bool($short_circuit)),
                     Value::Bool(_) => continue,
                     _ => {
-                        return Err(SchemeError::TypeError(
+                        return Err(Error::TypeError(
                             concat!(
                                 "SCHEME-JSONLOGIC-STRICT: '",
                                 $op_name,

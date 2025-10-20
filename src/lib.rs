@@ -1,4 +1,4 @@
-//! RulesXP - Multi-language rules expression evaluator.
+//! RulesXP - Multi-language rules expression evaluator
 //!
 //! This crate provides a minimalistic expression evaluator that supports both Scheme syntax
 //! and JSONLogic operations with strict typing. It implements a proper subset of both
@@ -6,13 +6,12 @@
 //!
 //! ## Dual Language Support
 //!
-//! The evaluator accepts expressions in Scheme syntax but can evaluate operations that map
-//! to both Scheme and JSONLogic semantics:
+//! The evaluator accepts expressions in Scheme or JSONLogic syntax:
 //!
 //! ```scheme
 //! ;; Scheme syntax
 //! (+ 1 2 3)           ; arithmetic
-//! (if #t "yes" "no")  ; conditionals  
+//! (if #t "yes" "no")  ; conditionals
 //! (and #t #f)         ; boolean logic
 //! (car '(1 2 3))      ; list operations
 //! ```
@@ -20,7 +19,7 @@
 //! The same operations can be represented in JSONLogic:
 //! ```json
 //! {"+": [1, 2, 3]}
-//! {"if": [true, "yes", "no"]}  
+//! {"if": [true, "yes", "no"]}
 //! {"and": [true, false]}
 //! {"car": [[1, 2, 3]]}
 //! ```
@@ -40,7 +39,7 @@
 //! ## Modules
 //!
 //! - `scheme`: S-expression parsing from text
-//! - `evaluator`: Core expression evaluation engine  
+//! - `evaluator`: Core expression evaluation engine
 //! - `builtinops`: Built-in operations with dual-language mapping
 //! - `jsonlogic`: JSONLogic format conversion and integration
 
@@ -57,7 +56,7 @@ pub const MAX_EVAL_DEPTH: usize = 64;
 
 /// Error types for the interpreter
 #[derive(Debug, Clone, PartialEq)]
-pub enum SchemeError {
+pub enum Error {
     ParseError(String),
     EvalError(String),
     TypeError(String),
@@ -69,10 +68,10 @@ pub enum SchemeError {
     },
 }
 
-impl SchemeError {
+impl Error {
     /// Create an ArityError without expression context
     pub fn arity_error(expected: usize, got: usize) -> Self {
-        SchemeError::ArityError {
+        Error::ArityError {
             expected,
             got,
             expression: None,
@@ -81,7 +80,7 @@ impl SchemeError {
 
     /// Create an ArityError with expression context
     pub fn arity_error_with_expr(expected: usize, got: usize, expression: String) -> Self {
-        SchemeError::ArityError {
+        Error::ArityError {
             expected,
             got,
             expression: Some(expression),
@@ -89,14 +88,14 @@ impl SchemeError {
     }
 }
 
-impl fmt::Display for SchemeError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            SchemeError::ParseError(msg) => write!(f, "Parse error: {msg}"),
-            SchemeError::EvalError(msg) => write!(f, "Evaluation error: {msg}"),
-            SchemeError::TypeError(msg) => write!(f, "Type error: {msg}"),
-            SchemeError::UnboundVariable(var) => write!(f, "Unbound variable: {var}"),
-            SchemeError::ArityError {
+            Error::ParseError(msg) => write!(f, "Parse error: {msg}"),
+            Error::EvalError(msg) => write!(f, "Evaluation error: {msg}"),
+            Error::TypeError(msg) => write!(f, "Type error: {msg}"),
+            Error::UnboundVariable(var) => write!(f, "Unbound variable: {var}"),
+            Error::ArityError {
                 expected,
                 got,
                 expression,

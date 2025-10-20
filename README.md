@@ -11,13 +11,12 @@ It's designed for reliable rule evaluation with predictable behavior.
 
 ### Dual Language Support
 The project supports minimalistic subsets of:
-- **JSONLogic**: Industry-standard rules engine syntax
-- **Scheme R7RS**: Lisp-family functional programming syntax
+- **[JSONLogic](https://jsonlogic.com/)**: JSON-based rules engine syntax
+- **[Scheme R7RS](https://en.wikipedia.org/wiki/Scheme_\(programming_language\))**: Small Lisp-family functional programming syntax
 
 ### Strict Typing
-- **No Type Coercion**: `1 !== "1"` and `0 !== false`
+- **No Type Coercion**: `1 !== "1"` and `0 !== false`. No "truthiness" or automatic conversions
 - **Type Error Detection**: Type mismatches caught at evaluation time
-- **Predictable Behavior**: No JavaScript-style truthiness or automatic conversions
 
 ### Core Data Types
 - **Numbers**: 64-bit integers (`42`, `-5`, `#xFF`)

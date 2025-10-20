@@ -1,5 +1,5 @@
+use crate::Error;
 use crate::MAX_PARSE_DEPTH;
-use crate::SchemeError;
 use crate::ast::{Value, is_valid_symbol};
 use crate::builtinops::{
     Arity, BuiltinOp, find_jsonlogic_op, find_scheme_op, get_list_op, get_quote_op,
@@ -17,15 +17,15 @@ enum CompilationContext {
 }
 
 /// Parse JSONLogic expression into AST value for evaluation
-pub fn parse_jsonlogic(input: &str) -> Result<Value, SchemeError> {
-    let json_value: serde_json::Value = serde_json::from_str(input)
-        .map_err(|e| SchemeError::ParseError(format!("Invalid JSON: {e}")))?;
+pub fn parse_jsonlogic(input: &str) -> Result<Value, Error> {
+    let json_value: serde_json::Value =
+        serde_json::from_str(input).map_err(|e| Error::ParseError(format!("Invalid JSON: {e}")))?;
 
     compile_json_to_ast(json_value)
 }
 
 /// Compile a serde_json::Value to AST value
-fn compile_json_to_ast(json: serde_json::Value) -> Result<Value, SchemeError> {
+fn compile_json_to_ast(json: serde_json::Value) -> Result<Value, Error> {
     compile_json_to_ast_with_context(json, CompilationContext::Normal, 0)
 }
 
@@ -33,15 +33,15 @@ fn compile_json_to_ast_with_context(
     json: serde_json::Value,
     context: CompilationContext,
     depth: usize,
-) -> Result<Value, SchemeError> {
+) -> Result<Value, Error> {
     if depth >= MAX_PARSE_DEPTH {
-        return Err(SchemeError::ParseError(format!(
+        return Err(Error::ParseError(format!(
             "JSONLogic expression too deeply nested (max depth: {MAX_PARSE_DEPTH})"
         )));
     }
     match json {
         // Primitives
-        serde_json::Value::Null => Err(SchemeError::ParseError(
+        serde_json::Value::Null => Err(Error::ParseError(
             "null values are not supported in this JSONLogic implementation".into(),
         )),
         serde_json::Value::Bool(b) => Ok(Value::Bool(b)),
@@ -49,7 +49,7 @@ fn compile_json_to_ast_with_context(
             if let Some(i) = n.as_i64() {
                 Ok(Value::Number(i))
             } else {
-                Err(SchemeError::ParseError(format!(
+                Err(Error::ParseError(format!(
                     "Number too large or not integer: {n}"
                 )))
             }
@@ -91,7 +91,7 @@ fn compile_json_to_ast_with_context(
                 match (iter.next(), iter.next()) {
                     (Some((op, val)), None) => (op, val), // Exactly one item
                     _ => {
-                        return Err(SchemeError::ParseError(
+                        return Err(Error::ParseError(
                             "JSONLogic operations must have exactly one operator".into(),
                         ));
                     }
@@ -108,13 +108,13 @@ fn compile_json_to_ast_with_context(
                             serde_json::Value::String(var_name) if is_valid_symbol(&var_name) => {
                                 Ok(Value::Symbol(var_name))
                             }
-                            _ => Err(SchemeError::ParseError(
+                            _ => Err(Error::ParseError(
                                 "Variable must be a valid symbol string".into(),
                             )),
                         }
                     } else {
                         // Reject all other object form operations in quote context
-                        Err(SchemeError::ParseError(format!(
+                        Err(Error::ParseError(format!(
                             "Object form operations like '{{\"{operator}\":...}}' are not allowed in quote context. Use list form like '[\"{operator}\", ...]' instead"
                         )))
                     }
@@ -133,9 +133,9 @@ fn compile_jsonlogic_operation(
     operator: &str,
     operands: serde_json::Value,
     depth: usize,
-) -> Result<Value, SchemeError> {
+) -> Result<Value, Error> {
     // Helper function to extract operands as a list, ignoring arity checks
-    let extract_operand_list = |operands: serde_json::Value| -> Result<Vec<Value>, SchemeError> {
+    let extract_operand_list = |operands: serde_json::Value| -> Result<Vec<Value>, Error> {
         match operands {
             serde_json::Value::Array(arr) => {
                 // Convert each operand - arrays that appear as operands should use list constructors as data
@@ -208,7 +208,7 @@ fn compile_jsonlogic_operation(
             serde_json::Value::String(var_name) if is_valid_symbol(&var_name) => {
                 Ok(Value::Symbol(var_name))
             }
-            _ => Err(SchemeError::ParseError(
+            _ => Err(Error::ParseError(
                 "Variable must be a valid symbol string".into(),
             )),
         },
@@ -220,7 +220,7 @@ fn compile_jsonlogic_operation(
                 serde_json::Value::Array(arr) => match arr.as_slice() {
                     [single_operand] => single_operand.clone(),
                     _ => {
-                        return Err(SchemeError::ParseError("quote requires one operand".into()));
+                        return Err(Error::ParseError("quote requires one operand".into()));
                     }
                 },
                 single_operand => single_operand, // Single operand without array wrapper
@@ -255,14 +255,14 @@ fn compile_jsonlogic_operation(
                 // Check if this unknown JSONLogic operator happens to be a known Scheme builtin
                 // If so, reject it to prevent accidental access to Scheme symbols via JSONLogic
                 if find_scheme_op(operator).is_some() {
-                    Err(SchemeError::ParseError(format!(
+                    Err(Error::ParseError(format!(
                         "JSONLogic operator '{operator}' is not supported. Use the JSONLogic equivalent instead (e.g., use '!' instead of 'not')."
                     )))
                 } else {
                     // Operation not in registry and not a Scheme builtin - emit as regular list for custom operations
                     // But first validate that the operator name is a valid symbol
                     if !is_valid_symbol(operator) {
-                        return Err(SchemeError::ParseError(format!(
+                        return Err(Error::ParseError(format!(
                             "Invalid operator name: '{operator}'"
                         )));
                     }
@@ -277,14 +277,14 @@ fn compile_jsonlogic_operation(
 }
 
 /// Convert an AST value back to JSONLogic format
-pub fn ast_to_jsonlogic(value: &Value) -> Result<String, SchemeError> {
+pub fn ast_to_jsonlogic(value: &Value) -> Result<String, Error> {
     let json_value = ast_to_json_value(value)?;
     serde_json::to_string(&json_value)
-        .map_err(|e| SchemeError::EvalError(format!("Failed to serialize JSON: {e}")))
+        .map_err(|e| Error::EvalError(format!("Failed to serialize JSON: {e}")))
 }
 
 /// Convert an AST value to serde_json::Value for JSONLogic output
-fn ast_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> {
+fn ast_to_json_value(value: &Value) -> Result<serde_json::Value, Error> {
     ast_to_json_value_with_context(value, false)
 }
 
@@ -292,7 +292,7 @@ fn ast_to_json_value(value: &Value) -> Result<serde_json::Value, SchemeError> {
 fn ast_to_json_value_with_context(
     value: &Value,
     in_quote_context: bool,
-) -> Result<serde_json::Value, SchemeError> {
+) -> Result<serde_json::Value, Error> {
     match value {
         Value::Number(n) => Ok(serde_json::Value::Number(serde_json::Number::from(*n))),
         Value::String(s) => Ok(serde_json::Value::String(s.clone())),
@@ -302,13 +302,13 @@ fn ast_to_json_value_with_context(
         Value::List(list) => {
             if in_quote_context {
                 // In quote context, lists always become arrays
-                let converted: Result<Vec<serde_json::Value>, SchemeError> = list
+                let converted: Result<Vec<serde_json::Value>, Error> = list
                     .iter()
                     .map(|v| ast_to_json_value_with_context(v, true))
                     .collect();
                 Ok(serde_json::Value::Array(converted?))
             } else if let [Value::Symbol(op), args @ ..] = list.as_slice() {
-                let args: Result<Vec<serde_json::Value>, SchemeError> =
+                let args: Result<Vec<serde_json::Value>, Error> =
                     args.iter().map(ast_to_json_value).collect();
                 let args = args?;
 
@@ -321,24 +321,22 @@ fn ast_to_json_value_with_context(
                     }
                 }
             } else {
-                let converted: Result<Vec<serde_json::Value>, SchemeError> =
+                let converted: Result<Vec<serde_json::Value>, Error> =
                     list.iter().map(ast_to_json_value).collect();
                 Ok(serde_json::Value::Array(converted?))
             }
         }
-        Value::BuiltinFunction { .. } => Err(SchemeError::EvalError(
-            "Cannot convert builtin function".into(),
-        )),
+        Value::BuiltinFunction { .. } => {
+            Err(Error::EvalError("Cannot convert builtin function".into()))
+        }
         Value::PrecompiledOp { op, args, .. } => {
             if in_quote_context {
-                return Err(SchemeError::EvalError(
-                    "PrecompiledOp in quote context".into(),
-                ));
+                return Err(Error::EvalError("PrecompiledOp in quote context".into()));
             }
 
             match op.scheme_id {
                 "list" => {
-                    let converted: Result<Vec<serde_json::Value>, SchemeError> =
+                    let converted: Result<Vec<serde_json::Value>, Error> =
                         args.iter().map(ast_to_json_value).collect();
                     Ok(serde_json::Value::Array(converted?))
                 }
@@ -347,21 +345,17 @@ fn ast_to_json_value_with_context(
                         let quoted_content = ast_to_json_value_with_context(single_arg, true)?;
                         Ok(serde_json::json!({"scheme-quote": [quoted_content]}))
                     }
-                    _ => Err(SchemeError::EvalError(
-                        "Quote needs one argument".to_owned(),
-                    )),
+                    _ => Err(Error::EvalError("Quote needs one argument".to_owned())),
                 },
                 _ => {
-                    let converted_args: Result<Vec<serde_json::Value>, SchemeError> =
+                    let converted_args: Result<Vec<serde_json::Value>, Error> =
                         args.iter().map(ast_to_json_value).collect();
                     Ok(serde_json::json!({op.jsonlogic_id: converted_args?}))
                 }
             }
         }
-        Value::Function { .. } => Err(SchemeError::EvalError(
-            "Cannot convert user function".to_owned(),
-        )),
-        Value::Unspecified => Err(SchemeError::EvalError(
+        Value::Function { .. } => Err(Error::EvalError("Cannot convert user function".to_owned())),
+        Value::Unspecified => Err(Error::EvalError(
             "Cannot convert unspecified value".to_owned(),
         )),
     }

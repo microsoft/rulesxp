@@ -4,13 +4,13 @@ use nom::{
     bytes::complete::{tag, take_while1},
     character::complete::{char, multispace0, multispace1},
     combinator::{opt, recognize, value},
-    error::{Error, ErrorKind},
+    error::ErrorKind,
     multi::separated_list0,
     sequence::{pair, preceded, terminated},
 };
 
+use crate::Error;
 use crate::MAX_PARSE_DEPTH;
-use crate::SchemeError;
 use crate::ast::{NumberType, SYMBOL_SPECIAL_CHARS, Value, is_valid_symbol};
 use crate::builtinops::{find_scheme_op, get_quote_op};
 
@@ -32,7 +32,7 @@ enum ShouldPrecompileOps {
 }
 
 /// Convert nom parsing errors to user-friendly messages
-fn parse_error_to_message(input: &str, error: nom::Err<Error<&str>>) -> String {
+fn parse_error_to_message(input: &str, error: nom::Err<nom::error::Error<&str>>) -> String {
     match error {
         nom::Err::Error(e) | nom::Err::Failure(e) => {
             let position = input.len().saturating_sub(e.input.len());
@@ -291,7 +291,7 @@ fn parse_quote(
 }
 
 /// Parse a complete S-expression from input with optimization enabled
-pub fn parse_scheme(input: &str) -> Result<Value, SchemeError> {
+pub fn parse_scheme(input: &str) -> Result<Value, Error> {
     match terminated(
         |input| parse_sexpr(input, ShouldPrecompileOps::Yes, 0),
         multispace0,
@@ -303,22 +303,20 @@ pub fn parse_scheme(input: &str) -> Result<Value, SchemeError> {
             validate_arity_in_ast(&value)?;
             Ok(value)
         }
-        Ok((remaining, _)) => Err(SchemeError::ParseError(format!(
+        Ok((remaining, _)) => Err(Error::ParseError(format!(
             "Unexpected remaining input: '{remaining}'"
         ))),
-        Err(e) => Err(SchemeError::ParseError(parse_error_to_message(input, e))),
+        Err(e) => Err(Error::ParseError(parse_error_to_message(input, e))),
     }
 }
 
 /// Recursively validate arity in parsed AST - simpler than threading through parser
-fn validate_arity_in_ast(value: &Value) -> Result<(), SchemeError> {
+fn validate_arity_in_ast(value: &Value) -> Result<(), Error> {
     match value {
         Value::PrecompiledOp { op, args, .. } => {
             // Validate this operation's arity
-            if let Err(SchemeError::ArityError { expected, got, .. }) =
-                op.validate_arity(args.len())
-            {
-                return Err(SchemeError::arity_error_with_expr(
+            if let Err(Error::ArityError { expected, got, .. }) = op.validate_arity(args.len()) {
+                return Err(Error::arity_error_with_expr(
                     expected,
                     got,
                     format!("{}", value.to_uncompiled_form()),

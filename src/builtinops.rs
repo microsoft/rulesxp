@@ -10,7 +10,7 @@
 //! ```scheme
 //! ;; Scheme syntax
 //! (not #t)           ; logical negation
-//! (+ 1 2 3)          ; arithmetic  
+//! (+ 1 2 3)          ; arithmetic
 //! (equal? "a" "b")   ; equality test
 //! ```
 //!
@@ -25,7 +25,7 @@
 //!
 //! - **Functions**: Evaluate all arguments before application (e.g., `+`, `not`, `car`)
 //! - **Special Forms**: Control evaluation of arguments (e.g., `if`, `and`, `or`)
-//!   
+//!
 //! Special forms are handled directly by the evaluator and are not in this registry.
 //!
 //! ## Error Handling
@@ -43,13 +43,13 @@
 //!
 //! To add a new built-in operation:
 //!
-//! 1. **Implement the function** following the signature `fn(args: &[Value]) -> Result<Value, SchemeError>`
+//! 1. **Implement the function** following the signature `fn(args: &[Value]) -> Result<Value, Error>`
 //! 2. **Add to BUILTIN_OPS** with Scheme identifier and arity
 //! 3. **Add to BUILTIN_OPS_JSONLOGIC** if it has a different JSONLogic identifier
 //! 4. **Update evaluator** if it's a special form requiring custom evaluation logic
 //! 5. **Add comprehensive tests** covering edge cases and error conditions
 
-use crate::SchemeError;
+use crate::Error;
 use crate::ast::{NumberType, Value};
 use crate::evaluator::{
     Environment, eval_and, eval_define, eval_if, eval_lambda, eval_or, eval_quote,
@@ -72,7 +72,7 @@ pub enum Arity {
 
 impl Arity {
     /// Check if the given number of arguments is valid for this arity constraint
-    pub(crate) fn validate(&self, arg_count: usize) -> Result<(), SchemeError> {
+    pub(crate) fn validate(&self, arg_count: usize) -> Result<(), Error> {
         let valid = match self {
             Arity::Exact(n) => arg_count == *n,
             Arity::AtLeast(n) => arg_count >= *n,
@@ -83,7 +83,7 @@ impl Arity {
         if valid {
             Ok(())
         } else {
-            Err(SchemeError::ArityError {
+            Err(Error::ArityError {
                 expected: match self {
                     Arity::Exact(n) | Arity::AtLeast(n) => *n,
                     Arity::Range(min, _) => *min,
@@ -100,9 +100,9 @@ impl Arity {
 #[derive(Clone)]
 pub enum OpKind {
     /// Regular function that takes arguments and returns a value
-    Function(fn(&[Value]) -> Result<Value, SchemeError>),
+    Function(fn(&[Value]) -> Result<Value, Error>),
     /// Special form that requires access to the environment, unevaluated arguments and current evaluation stack depth
-    SpecialForm(fn(&[Value], &mut Environment, usize) -> Result<Value, SchemeError>),
+    SpecialForm(fn(&[Value], &mut Environment, usize) -> Result<Value, Error>),
 }
 
 impl std::fmt::Debug for OpKind {
@@ -156,7 +156,7 @@ impl BuiltinOp {
     }
 
     /// Check if the given number of arguments is valid for this operation
-    pub(crate) fn validate_arity(&self, arg_count: usize) -> Result<(), SchemeError> {
+    pub(crate) fn validate_arity(&self, arg_count: usize) -> Result<(), Error> {
         self.arity.validate(arg_count)
     }
 }
@@ -168,10 +168,10 @@ impl BuiltinOp {
 // Macro to generate numeric comparison functions
 macro_rules! numeric_comparison {
     ($name:ident, $op:tt, $op_str:expr) => {
-        pub fn $name(args: &[Value]) -> Result<Value, SchemeError> {
+        fn $name(args: &[Value]) -> Result<Value, Error> {
             // SCHEME-JSONLOGIC-STRICT: Require at least 2 arguments (both standards allow < 2 args but with different semantics)
             if args.len() < 2 {
-                return Err(SchemeError::arity_error(2, args.len()));
+                return Err(Error::arity_error(2, args.len()));
             }
 
             // Chain comparisons: all adjacent pairs must satisfy the comparison
@@ -182,7 +182,7 @@ macro_rules! numeric_comparison {
                             return Ok(Value::Bool(false));
                         }
                     }
-                    _ => return Err(SchemeError::TypeError(concat!($op_str, " requires numbers").into())),
+                    _ => return Err(Error::TypeError(concat!($op_str, " requires numbers").into())),
                 }
             }
 
@@ -198,28 +198,28 @@ numeric_comparison!(builtin_gt, >, ">");
 numeric_comparison!(builtin_le, <=, "<=");
 numeric_comparison!(builtin_ge, >=, ">=");
 
-fn builtin_add(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_add(args: &[Value]) -> Result<Value, Error> {
     let mut sum = 0 as NumberType;
     for arg in args {
         if let Value::Number(n) = arg {
             sum = sum
                 .checked_add(*n)
-                .ok_or_else(|| SchemeError::EvalError("Integer overflow in addition".into()))?;
+                .ok_or_else(|| Error::EvalError("Integer overflow in addition".into()))?;
         } else {
-            return Err(SchemeError::TypeError("+ requires numbers".into()));
+            return Err(Error::TypeError("+ requires numbers".into()));
         }
     }
     Ok(Value::Number(sum))
 }
 
-fn builtin_sub(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_sub(args: &[Value]) -> Result<Value, Error> {
     match args {
-        [] => Err(SchemeError::arity_error(1, 0)),
+        [] => Err(Error::arity_error(1, 0)),
         [Value::Number(first)] => {
             // Unary minus: check for overflow when negating
             let result = first
                 .checked_neg()
-                .ok_or_else(|| SchemeError::EvalError("Integer overflow in negation".into()))?;
+                .ok_or_else(|| Error::EvalError("Integer overflow in negation".into()))?;
             Ok(Value::Number(result))
         }
         [Value::Number(first), rest @ ..] => {
@@ -227,96 +227,94 @@ fn builtin_sub(args: &[Value]) -> Result<Value, SchemeError> {
             for arg in rest {
                 if let Value::Number(n) = arg {
                     result = result.checked_sub(*n).ok_or_else(|| {
-                        SchemeError::EvalError("Integer overflow in subtraction".into())
+                        Error::EvalError("Integer overflow in subtraction".into())
                     })?;
                 } else {
-                    return Err(SchemeError::TypeError("- requires numbers".into()));
+                    return Err(Error::TypeError("- requires numbers".into()));
                 }
             }
             Ok(Value::Number(result))
         }
-        _ => Err(SchemeError::TypeError("- requires numbers".into())),
+        _ => Err(Error::TypeError("- requires numbers".into())),
     }
 }
 
-fn builtin_mul(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_mul(args: &[Value]) -> Result<Value, Error> {
     // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns 1)
     if args.is_empty() {
-        return Err(SchemeError::arity_error(1, 0));
+        return Err(Error::arity_error(1, 0));
     }
 
     let mut product = 1 as NumberType;
     for arg in args {
         if let Value::Number(n) = arg {
-            product = product.checked_mul(*n).ok_or_else(|| {
-                SchemeError::EvalError("Integer overflow in multiplication".into())
-            })?;
+            product = product
+                .checked_mul(*n)
+                .ok_or_else(|| Error::EvalError("Integer overflow in multiplication".into()))?;
         } else {
-            return Err(SchemeError::TypeError("* requires numbers".into()));
+            return Err(Error::TypeError("* requires numbers".into()));
         }
     }
     Ok(Value::Number(product))
 }
 
-fn builtin_car(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_car(args: &[Value]) -> Result<Value, Error> {
     match args {
         [Value::List(list)] => match list.as_slice() {
-            [] => Err(SchemeError::EvalError("car of empty list".into())),
+            [] => Err(Error::EvalError("car of empty list".into())),
             [first, ..] => Ok(first.clone()),
         },
-        [_] => Err(SchemeError::TypeError("car requires a list".into())),
-        _ => Err(SchemeError::arity_error(1, args.len())),
+        [_] => Err(Error::TypeError("car requires a list".into())),
+        _ => Err(Error::arity_error(1, args.len())),
     }
 }
 
-fn builtin_cdr(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_cdr(args: &[Value]) -> Result<Value, Error> {
     match args {
         [Value::List(list)] => match list.as_slice() {
-            [] => Err(SchemeError::EvalError("cdr of empty list".into())),
+            [] => Err(Error::EvalError("cdr of empty list".into())),
             [_, rest @ ..] => Ok(Value::List(rest.to_vec())),
         },
-        [_] => Err(SchemeError::TypeError("cdr requires a list".into())),
-        _ => Err(SchemeError::arity_error(1, args.len())),
+        [_] => Err(Error::TypeError("cdr requires a list".into())),
+        _ => Err(Error::arity_error(1, args.len())),
     }
 }
 
-fn builtin_cons(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_cons(args: &[Value]) -> Result<Value, Error> {
     match args {
         [first, Value::List(rest)] => {
             let mut new_list = vec![first.clone()];
             new_list.extend_from_slice(rest);
             Ok(Value::List(new_list))
         }
-        [_, _] => Err(SchemeError::TypeError(
+        [_, _] => Err(Error::TypeError(
             // SCHEME-STRICT: Require second argument to be a list (Scheme R7RS allows improper lists)
             "cons requires a list as second argument".to_owned(),
         )),
-        _ => Err(SchemeError::arity_error(2, args.len())),
+        _ => Err(Error::arity_error(2, args.len())),
     }
 }
 
-fn builtin_list(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_list(args: &[Value]) -> Result<Value, Error> {
     Ok(Value::List(args.to_vec()))
 }
 
-fn builtin_null(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_null(args: &[Value]) -> Result<Value, Error> {
     match args {
         [value] => Ok(Value::Bool(value.is_nil())),
-        _ => Err(SchemeError::arity_error(1, args.len())),
+        _ => Err(Error::arity_error(1, args.len())),
     }
 }
 
-fn builtin_not(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_not(args: &[Value]) -> Result<Value, Error> {
     match args {
         [Value::Bool(b)] => Ok(Value::Bool(!b)),
-        [_] => Err(SchemeError::TypeError(
-            "not requires a boolean argument".into(),
-        )),
-        _ => Err(SchemeError::arity_error(1, args.len())),
+        [_] => Err(Error::TypeError("not requires a boolean argument".into())),
+        _ => Err(Error::arity_error(1, args.len())),
     }
 }
 
-fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_equal(args: &[Value]) -> Result<Value, Error> {
     match args {
         [first, second] => {
             // Scheme's equal? is structural equality for all types
@@ -332,23 +330,23 @@ fn builtin_equal(args: &[Value]) -> Result<Value, SchemeError> {
                 }
                 _ => {
                     // Different types or non-comparable types - reject type coercion
-                    Err(SchemeError::TypeError(
+                    Err(Error::TypeError(
                         "JSONLOGIC-STRICT: Equality comparison requires arguments of the same comparable type (no type coercion)".to_owned(),
                     ))
                 }
             }
         }
-        _ => Err(SchemeError::arity_error(2, args.len())),
+        _ => Err(Error::arity_error(2, args.len())),
     }
 }
 
-fn builtin_string_append(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_string_append(args: &[Value]) -> Result<Value, Error> {
     let mut result = String::new();
     for arg in args {
         if let Value::String(s) = arg {
             result.push_str(s);
         } else {
-            return Err(SchemeError::TypeError(
+            return Err(Error::TypeError(
                 "string-append requires string arguments".into(),
             ));
         }
@@ -358,16 +356,16 @@ fn builtin_string_append(args: &[Value]) -> Result<Value, SchemeError> {
 
 macro_rules! min_max_op {
     ($name:ident, $op:ident, $initial:expr, $op_name:expr) => {
-        fn $name(args: &[Value]) -> Result<Value, SchemeError> {
+        fn $name(args: &[Value]) -> Result<Value, Error> {
             if args.is_empty() {
-                return Err(SchemeError::arity_error(1, 0));
+                return Err(Error::arity_error(1, 0));
             }
             let mut result = $initial;
             for arg in args {
                 if let Value::Number(n) = arg {
                     result = result.$op(*n);
                 } else {
-                    return Err(SchemeError::TypeError(
+                    return Err(Error::TypeError(
                         concat!($op_name, " requires number arguments").into(),
                     ));
                 }
@@ -380,7 +378,7 @@ macro_rules! min_max_op {
 min_max_op!(builtin_max, max, NumberType::MIN, "max");
 min_max_op!(builtin_min, min, NumberType::MAX, "min");
 
-fn builtin_error(args: &[Value]) -> Result<Value, SchemeError> {
+fn builtin_error(args: &[Value]) -> Result<Value, Error> {
     // Convert a value to error message string
     fn value_to_error_string(value: &Value) -> String {
         match value {
@@ -400,9 +398,9 @@ fn builtin_error(args: &[Value]) -> Result<Value, SchemeError> {
     }
 
     match args {
-        [] => Err(SchemeError::EvalError("Error".into())),
-        [single] => Err(SchemeError::EvalError(value_to_error_string(single))),
-        [first, rest @ ..] => Err(SchemeError::EvalError(build_error_message(first, rest))),
+        [] => Err(Error::EvalError("Error".into())),
+        [single] => Err(Error::EvalError(value_to_error_string(single))),
+        [first, rest @ ..] => Err(Error::EvalError(build_error_message(first, rest))),
     }
 }
 
@@ -592,7 +590,7 @@ pub(crate) fn find_scheme_op(id: &str) -> Option<&'static BuiltinOp> {
     BUILTIN_SCHEME.get(id).copied()
 }
 
-/// Find a builtin operation by its JSONLogic identifier  
+/// Find a builtin operation by its JSONLogic identifier
 pub(crate) fn find_jsonlogic_op(id: &str) -> Option<&'static BuiltinOp> {
     BUILTIN_JSONLOGIC.get(id).copied()
 }
@@ -602,7 +600,7 @@ pub(crate) fn get_quote_op() -> &'static BuiltinOp {
     find_scheme_op("quote").expect("quote builtin operation must be available")
 }
 
-/// Get the list builtin operation - guaranteed to exist  
+/// Get the list builtin operation - guaranteed to exist
 pub(crate) fn get_list_op() -> &'static BuiltinOp {
     find_scheme_op("list").expect("list builtin operation must be available")
 }
@@ -704,7 +702,7 @@ mod tests {
     #[test]
     #[expect(clippy::too_many_lines)] // Comprehensive test coverage is intentionally thorough
     fn test_builtin_function_implementations() {
-        type TestCase = (&'static str, Result<Value, SchemeError>, Option<Value>);
+        type TestCase = (&'static str, Result<Value, Error>, Option<Value>);
 
         // =================================================================
         // DYNAMIC TEST DATA SETUP
@@ -1067,7 +1065,7 @@ mod tests {
 
         for (args, expected_msg) in test_cases {
             match builtin_error(&args).unwrap_err() {
-                SchemeError::EvalError(msg) => {
+                Error::EvalError(msg) => {
                     assert_eq!(msg, expected_msg, "Failed for args: {args:?}");
                 }
                 _ => panic!("Expected EvalError for args: {args:?}"),
@@ -1103,7 +1101,7 @@ mod tests {
 
         // Test error messages
         match Exact(2).validate(1).unwrap_err() {
-            SchemeError::ArityError { expected, got, .. } => {
+            Error::ArityError { expected, got, .. } => {
                 assert_eq!(expected, 2);
                 assert_eq!(got, 1);
             }

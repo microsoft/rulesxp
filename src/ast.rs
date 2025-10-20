@@ -1,23 +1,23 @@
 /// This module defines the core Abstract Syntax Tree (AST) types and helper functions
-/// for representing Scheme values in the interpreter. The main enum, [`Value`], covers
+/// for representing values in the interpreter. The main enum, [`Value`], covers
 /// all Scheme data types, including numbers, symbols, strings, booleans, lists, built-in
 /// and user-defined functions, and precompiled operations. Ergonomic helper functions
 /// such as [`val`], [`sym`], and [`nil`] are provided for convenient AST construction
 /// in both code and tests. The module also implements conversion traits for common Rust
-/// types, making it easy to build Scheme values from Rust literals, arrays, slices, and
+/// types, making it easy to build Values from Rust literals, arrays, slices, and
 /// vectors. Equality and display logic are customized to match Scheme semantics, including
 /// round-trip compatibility for precompiled operations.
-use crate::SchemeError;
+use crate::Error;
 use crate::builtinops::BuiltinOp;
 
-/// Type alias for number values in our Scheme interpreter
-pub type NumberType = i64;
+/// Type alias for number values in interpreter
+pub(crate) type NumberType = i64;
 
 /// Allowed non-alphanumeric characters in Scheme symbol names
 /// Most represent mathematical symbols or predicates ("?"), "$" supported for JavaScript identifiers
-pub const SYMBOL_SPECIAL_CHARS: &str = "+-*/<>=!?_$";
+pub(crate) const SYMBOL_SPECIAL_CHARS: &str = "+-*/<>=!?_$";
 
-/// Check if a string is a valid Scheme symbol name
+/// Check if a string is a valid symbol name
 /// Valid: non-empty, no leading digit, no "-digit" prefix, alphanumeric + SYMBOL_SPECIAL_CHARS
 /// Note: This function is tested as part of the parser tests in parser.rs
 pub(crate) fn is_valid_symbol(name: &str) -> bool {
@@ -45,7 +45,7 @@ pub(crate) fn is_valid_symbol(name: &str) -> bool {
     }
 }
 
-/// Core AST type in our Scheme interpreter
+/// Core AST type in interpreter
 ///
 /// Note: PrecompiledOps (optimized s-expressions) don't equality-compare to dynamically
 /// generated unoptimized s-expressions. However, since no expression can *return* a
@@ -77,7 +77,7 @@ pub enum Value {
     /// Uses id string for equality comparison instead of function pointer
     BuiltinFunction {
         id: String,
-        func: fn(&[Value]) -> Result<Value, SchemeError>,
+        func: fn(&[Value]) -> Result<Value, Error>,
     },
     /// User-defined functions (params, body, closure env)
     Function {
