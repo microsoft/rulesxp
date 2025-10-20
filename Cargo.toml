@@ -1,6 +1,6 @@
 [package]
 name = "rulesxp"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.90"
 description = "Multi-language rules expression evaluator supporting JSONLogic and Scheme with strict typing"
@@ -42,6 +42,10 @@ index_refutable_slice = "warn"
 clone_on_ref_ptr = "warn"
 indexing_slicing = "warn"
 string_slice = "warn"
+
+[package.metadata.docs.rs]
+all-features = true
+
 
 [profile.release]
 # Optimize for size
