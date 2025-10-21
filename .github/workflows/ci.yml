@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, feature/pipeline-test ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust-version: ['1.90', 'stable']
+        features:
+          - ''
+          - 'scheme'
+          - 'jsonlogic'
+          - 'scheme,jsonlogic'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ matrix.rust-version }}
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Run tests
+      run: cargo test --features="${{ matrix.features }}" --verbose
+
+    - name: Run doc tests (all features)
+      run: cargo test --doc --all-features
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: llvm-tools-preview
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@cargo-llvm-cov
+
+    - name: Generate code coverage
+      run: cargo llvm-cov --all-features --workspace --html --output-dir coverage-html
+
+    - name: Upload coverage HTML
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage-html/
+        retention-days: 30
+
+  lint:
+    name: Linting
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+
+    - name: Run clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Build documentation
+      run: cargo doc --all-features --no-deps
+
+    - name: Check for broken links in docs
+      run: cargo doc --all-features --no-deps 2>&1 | grep -i "warning\|error" && exit 1 || exit 0
+
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+
+    - name: Run security audit
+      run: cargo audit

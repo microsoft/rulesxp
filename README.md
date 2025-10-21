@@ -1,5 +1,9 @@
 # RulesXP
 
+[![CI](https://github.com/microsoft/rulesxp/workflows/CI/badge.svg)](https://github.com/microsoft/rulesxp/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/rulesxp.svg)](https://crates.io/crates/rulesxp)
+[![Documentation](https://docs.rs/rulesxp/badge.svg)](https://docs.rs/rulesxp)
+
 **Multi-Language Rules Expression Evaluator**
 
 RulesXP is a minimalistic expression evaluator that supports both JSONLogic and Scheme syntax with strict typing.
