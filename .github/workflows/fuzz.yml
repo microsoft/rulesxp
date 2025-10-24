@@ -1,0 +1,140 @@
+name: Fuzzing
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Fuzzing duration in seconds per target'
+        required: false
+        default: '300'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzz Testing
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ['eval_sexpr', 'eval_jsonlogic']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Install Rust nightly
+      uses: dtolnay/rust-toolchain@nightly
+
+    - name: Install cargo-fuzz
+      run: cargo install cargo-fuzz
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Run fuzzer
+      run: |
+        DURATION=${{ github.event.inputs.duration || '300' }}
+        cargo fuzz run ${{ matrix.target }} -- -max_total_time=$DURATION
+      continue-on-error: true
+
+    - name: Check for crashes
+      id: check_crashes
+      run: |
+        if [ -d "fuzz/artifacts/${{ matrix.target }}" ] && [ "$(ls -A fuzz/artifacts/${{ matrix.target }})" ]; then
+          echo "crashes_found=true" >> $GITHUB_OUTPUT
+          echo "::warning::Crashes found in ${{ matrix.target }}"
+        else
+          echo "crashes_found=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Upload crash artifacts
+      if: steps.check_crashes.outputs.crashes_found == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: fuzz-crashes-${{ matrix.target }}
+        path: fuzz/artifacts/${{ matrix.target }}/
+
+    - name: Upload corpus
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fuzz-corpus-${{ matrix.target }}
+        path: fuzz/corpus/${{ matrix.target }}/
+        retention-days: 7
+
+    - name: Create issue for crashes
+      if: steps.check_crashes.outputs.crashes_found == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const target = '${{ matrix.target }}';
+          const artifactsPath = `fuzz/artifacts/${target}`;
+          
+          // List crash files
+          let crashFiles = [];
+          try {
+            crashFiles = fs.readdirSync(artifactsPath);
+          } catch (e) {
+            crashFiles = ['(unable to read crash files)'];
+          }
+          
+          const body = `## Fuzzing Crash Detected
+          
+          **Target:** \`${target}\`
+          **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          **Branch:** \`${{ github.ref_name }}\`
+          **Commit:** ${{ github.sha }}
+          
+          ### Crash Files
+          ${crashFiles.map(f => `- \`${f}\``).join('\n')}
+          
+          ### Next Steps
+          1. Download the crash artifacts from the workflow run
+          2. Reproduce locally: \`cargo +nightly fuzz run ${target} fuzz/artifacts/${target}/<crash-file>\`
+          3. Fix the underlying issue
+          4. Re-run fuzzing to verify the fix
+          
+          Crash artifacts are available in the workflow artifacts for 90 days.`;
+          
+          // Check if issue already exists for this target
+          const issues = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            labels: 'fuzzing',
+            state: 'open'
+          });
+          
+          const existingIssue = issues.data.find(issue => 
+            issue.title.includes(target) && issue.labels.some(l => l.name === 'fuzzing')
+          );
+          
+          if (existingIssue) {
+            // Add comment to existing issue
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: existingIssue.number,
+              body: `### New crash detected\n\n${body}`
+            });
+          } else {
+            // Create new issue
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Fuzzing crash in ${target}`,
+              body: body,
+              labels: ['bug', 'fuzzing']
+            });
+          }
+
+    - name: Fail if crashes found
+      if: steps.check_crashes.outputs.crashes_found == 'true'
+      run: |
+        echo "::error::Fuzzing discovered crashes in ${{ matrix.target }}"
+        exit 1
