@@ -54,14 +54,14 @@ jobs:
 
     - name: Upload crash artifacts
       if: steps.check_crashes.outputs.crashes_found == 'true'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: fuzz-crashes-${{ matrix.target }}
         path: fuzz/artifacts/${{ matrix.target }}/
 
     - name: Upload corpus
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: fuzz-corpus-${{ matrix.target }}
         path: fuzz/corpus/${{ matrix.target }}/
