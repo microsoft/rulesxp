@@ -1,0 +1,27 @@
+[package]
+name = "rulesxp-fuzz"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.rulesxp]
+path = ".."
+features = ["scheme", "jsonlogic"]
+
+[[bin]]
+name = "eval_sexpr"
+path = "fuzz_targets/eval_sexpr.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "eval_jsonlogic"
+path = "fuzz_targets/eval_jsonlogic.rs"
+test = false
+doc = false
