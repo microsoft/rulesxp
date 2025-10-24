@@ -111,6 +111,28 @@ jobs:
     - name: Check for broken links in docs
       run: cargo doc --all-features --no-deps 2>&1 | grep -i "warning\|error" && exit 1 || exit 0
 
+  fuzz-build:
+    # This job ensures the fuzz crate compiles on the nightly toolchain.
+    # Actual fuzzing runs on a schedule in fuzz.yml, not here.
+    name: Fuzz Build Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Install Rust nightly
+      uses: dtolnay/rust-toolchain@nightly
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Install cargo-fuzz
+      run: cargo install cargo-fuzz
+
+    - name: Check fuzz crate compilation
+      run: cargo fuzz build
+
   security:
     name: Security Audit
     runs-on: ubuntu-latest
