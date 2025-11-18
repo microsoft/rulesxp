@@ -1,0 +1,4 @@
+* text=auto eol=lf
+
+# Don't attempt to merge this file, just regenerate
+Cargo.lock text -merge
