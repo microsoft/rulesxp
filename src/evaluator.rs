@@ -1,8 +1,10 @@
 use crate::Error;
 use crate::MAX_EVAL_DEPTH;
 use crate::ast::Value;
-use crate::builtinops::get_builtin_ops;
+use crate::builtinops::{Arity, get_builtin_ops};
+use crate::intooperation::{IntoFixedOperation, IntoVariadicOperation, OperationFn};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Environment for variable bindings
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -38,9 +40,15 @@ impl Environment {
 
     /// Register a custom builtin function in the environment for use by Scheme/JSONLogic.
     ///
+    /// This is the low-level API: it accepts a function that already
+    /// works on `&[Value]` and returns `Result<Value, Error>`. Internally
+    /// it is wired through the same machinery as
+    /// [`Environment::register_builtin_operation`]. For most new code,
+    /// prefer the typed API instead of manipulating `Value` directly.
+    ///
     /// # Arguments
     /// * `name` - The name by which the function can be called
-    /// * `func` - A function pointer that takes a slice of Values and returns a Result
+    /// * `func` - A function pointer that takes a slice of `Value` and returns a `Result`
     ///
     /// # Example
     /// ```
@@ -62,11 +70,116 @@ impl Environment {
         name: &str,
         func: fn(&[Value]) -> Result<Value, Error>,
     ) {
+        // Wrap the raw slice-based function into the canonical
+        // `OperationFn` so it can be stored directly as a
+        // `BuiltinFunction`.
+        let f = func;
+        let wrapped: Arc<OperationFn> = Arc::new(move |args: Vec<Value>| f(&args));
+
         self.bindings.insert(
             name.to_string(),
             Value::BuiltinFunction {
                 id: name.to_string(),
-                func,
+                func: wrapped,
+            },
+        );
+    }
+
+    /// Register a strongly-typed Rust function as a builtin operation using
+    /// automatic argument extraction and result conversion.
+    ///
+    /// This allows writing natural Rust functions like:
+    ///
+    /// ```rust,ignore
+    /// fn add(a: i64, b: i64) -> i64 { a + b }
+    /// let mut env = rulesxp::evaluator::create_global_env();
+    /// env.register_builtin_operation("add", add);
+    /// // Now (+ 2 3) and (add 2 3) both work if + also registered
+    /// ```
+    ///
+    /// Builtins can also return `Result<R, E>` where `E: Display`:
+    ///
+    /// ```rust,ignore
+    /// use std::fmt::Display;
+    ///
+    /// fn safe_div(a: i64, b: i64) -> Result<i64, &'static str> {
+    ///     if b == 0 {
+    ///         Err("division by zero")
+    ///     } else {
+    ///         Ok(a / b)
+    ///     }
+    /// }
+    ///
+    /// let mut env = rulesxp::evaluator::create_global_env();
+    /// env.register_builtin_operation("safe-div", safe_div);
+    /// ```
+    ///
+    /// Supported parameter types (initial set):
+    /// - `i64` (number)
+    /// - `bool` (boolean)
+    /// - `&str` (borrowed string slices)
+    /// - `&Value` (borrowed access to the raw AST value)
+    /// - list arguments via slices such as `&[i64]`, `&[bool]`,
+    ///   `&[&str]`, and `&[Value]` (when the call site passes a list)
+    ///
+    /// Supported return types:
+    /// - any type implementing the internal `IntoValue` trait
+    ///   (currently `Value`, `i64`, `bool`, `String`, and `&str`)
+    /// - `Result<R, E>` where `R` is one of the above and `E: Display`
+    ///
+    /// If you need true rest-parameter / variadic behavior (functions
+    /// that see all arguments as `&[Value]` or `&[i64]`), use
+    /// [`Environment::register_variadic_builtin_operation`] instead.
+    ///
+    /// Arity is enforced automatically. Conversion errors yield `TypeError`,
+    /// and any `E` from a `Result<R, E>` is converted to `Error::EvalError`.
+    pub fn register_builtin_operation<F, Args, R>(&mut self, name: &str, func: F)
+    where
+        F: IntoFixedOperation<Args, R> + 'static,
+    {
+        let wrapped = func.into_operation();
+        self.bindings.insert(
+            name.to_string(),
+            Value::BuiltinFunction {
+                id: name.to_string(),
+                func: wrapped,
+            },
+        );
+    }
+
+    /// Register a variadic builtin operation with explicit arity metadata.
+    ///
+    /// This is intended for functions whose Rust signature includes a
+    /// "rest" parameter, either as a raw slice of values,
+    /// `fn(&[Value]) -> Result<Value, Error>`, or as a typed slice such
+    /// as `fn(&[i64])` or `fn(i64, &[i64])`.
+    /// Fixed-arity functions should use
+    /// [`Environment::register_builtin_operation`] instead.
+    ///
+    /// The provided [`Arity`] is used to validate the total number of
+    /// arguments at call time, since minimum/maximum argument counts for
+    /// variadic operations are not always derivable from the Rust type
+    /// signature alone.
+    pub fn register_variadic_builtin_operation<F, Args, R>(
+        &mut self,
+        name: &str,
+        arity: Arity,
+        func: F,
+    ) where
+        F: IntoVariadicOperation<Args, R> + 'static,
+    {
+        let inner = func.into_variadic_operation();
+        let arity_for_closure = arity;
+        let wrapped = std::sync::Arc::new(move |args: Vec<Value>| {
+            arity_for_closure.validate(args.len())?;
+            inner(args)
+        });
+
+        self.bindings.insert(
+            name.to_string(),
+            Value::BuiltinFunction {
+                id: name.to_string(),
+                func: wrapped,
             },
         );
     }
@@ -203,7 +316,7 @@ fn eval_list(elements: &[Value], env: &mut Environment, depth: usize) -> Result<
             // Apply the function
             match &func {
                 // Dynamic function calls
-                Value::BuiltinFunction { func: f, .. } => f(&args),
+                Value::BuiltinFunction { func, .. } => func(args),
                 Value::Function {
                     params,
                     body,
@@ -409,11 +522,12 @@ pub fn create_global_env() -> Environment {
     for builtin_op in get_builtin_ops() {
         if let crate::builtinops::OpKind::Function(func) = &builtin_op.op_kind {
             // Use BuiltinFunction for environment bindings (dynamic calls through symbols)
+            let f = *func;
             env.define(
                 builtin_op.scheme_id.to_owned(),
                 Value::BuiltinFunction {
                     id: builtin_op.scheme_id.to_owned(),
-                    func: *func,
+                    func: Arc::new(move |args: Vec<Value>| f(&args)),
                 },
             );
         }
@@ -426,8 +540,218 @@ pub fn create_global_env() -> Environment {
 #[expect(clippy::unwrap_used)] // test code OK
 mod tests {
     use super::*;
+    use crate::Error;
     use crate::ast::{nil, sym, val};
+    use crate::intooperation::Rest;
     use crate::scheme::parse_scheme;
+
+    #[test]
+    fn test_register_builtin_operation_add() {
+        fn add(a: i64, b: i64) -> i64 {
+            a + b
+        }
+        let mut env = create_global_env();
+        env.register_builtin_operation::<_, (i64, i64), i64>("add2", add);
+        let expr = parse_scheme("(add2 7 5)").unwrap();
+        let result = eval(&expr, &mut env).unwrap();
+        assert_eq!(result, Value::Number(12));
+    }
+
+    #[test]
+    fn test_register_builtin_operation_zero_arg() {
+        fn forty_two() -> i64 {
+            42
+        }
+
+        let mut env = create_global_env();
+        env.register_builtin_operation("forty-two", forty_two);
+
+        let expr = parse_scheme("(forty-two)").unwrap();
+        let result = eval(&expr, &mut env).unwrap();
+        assert_eq!(result, Value::Number(42));
+    }
+
+    #[test]
+    fn test_register_builtin_operation_result_builtin() {
+        fn safe_div(a: i64, b: i64) -> Result<i64, &'static str> {
+            if b == 0 {
+                Err("division by zero")
+            } else {
+                Ok(a / b)
+            }
+        }
+
+        let mut env = create_global_env();
+        // For functions returning Result<_, E>, Rust currently requires
+        // specifying the argument tuple `Args` and the output type `R`
+        // when using the typed API.
+        env.register_builtin_operation::<_, (i64, i64), i64>("safe-div", safe_div);
+
+        // Success case
+        let expr_ok = parse_scheme("(safe-div 6 3)").unwrap();
+        let result_ok = eval(&expr_ok, &mut env).unwrap();
+        assert_eq!(result_ok, Value::Number(2));
+
+        // Error case: division by zero surfaces as EvalError containing the message
+        let expr_err = parse_scheme("(safe-div 1 0)").unwrap();
+        let err = eval(&expr_err, &mut env).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("division by zero"));
+    }
+
+    #[test]
+    fn test_register_builtin_operation_vec_i64_list_param() {
+        fn sum_list(nums: &[i64]) -> i64 {
+            nums.iter().copied().sum()
+        }
+
+        let mut env = create_global_env();
+        env.register_builtin_operation::<_, (&[i64],), i64>("sum-list", sum_list);
+
+        let expr = parse_scheme("(sum-list '(1 2 3 4))").unwrap();
+        let result = eval(&expr, &mut env).unwrap();
+        assert_eq!(result, Value::Number(10));
+    }
+
+    #[test]
+    fn test_register_builtin_operation_with_rest_values() {
+        fn first_and_rest_count(args: Rest<Value>) -> Result<Value, Error> {
+            let args_slice = args.as_slice();
+
+            if args_slice.is_empty() {
+                return Err(Error::arity_error(1, 0));
+            }
+
+            let first_number = match args_slice.first().expect("arity checked above") {
+                Value::Number(n) => *n,
+                _ => return Err(Error::TypeError("first argument must be a number".into())),
+            };
+
+            Ok(Value::List(vec![
+                Value::Number(first_number),
+                Value::Number((args_slice.len() - 1) as i64),
+            ]))
+        }
+
+        let mut env = create_global_env();
+        env.register_variadic_builtin_operation::<_, (Rest<Value>,), Value>(
+            "first-rest-count",
+            Arity::AtLeast(1),
+            first_and_rest_count,
+        );
+
+        let expr = parse_scheme("(first-rest-count 42 \"x\" #t 7)").unwrap();
+        let result = eval(&expr, &mut env).unwrap();
+        assert_eq!(
+            result,
+            Value::List(vec![Value::Number(42), Value::Number(3)])
+        );
+    }
+
+    #[test]
+    fn test_register_builtin_operation_varargs_borrowed_values_all() {
+        fn count_numbers(args: Rest<Value>) -> Result<Value, Error> {
+            let args_slice = args.as_slice();
+
+            let count = args_slice
+                .iter()
+                .filter(|v| matches!(v, Value::Number(_)))
+                .count() as i64;
+
+            Ok(Value::Number(count))
+        }
+
+        let mut env = create_global_env();
+        env.register_variadic_builtin_operation::<_, (Rest<Value>,), Value>(
+            "count-numbers",
+            Arity::AtLeast(0),
+            count_numbers,
+        );
+
+        let expr = parse_scheme("(count-numbers 1 \"x\" 2 #t 3)").unwrap();
+        let result = eval(&expr, &mut env).unwrap();
+        assert_eq!(result, Value::Number(3));
+    }
+
+    #[test]
+    fn test_register_builtin_operation_varargs_all_i64() {
+        fn sum_all(nums: Rest<i64>) -> i64 {
+            nums.iter().copied().sum()
+        }
+
+        let mut env = create_global_env();
+        env.register_variadic_builtin_operation::<_, (Rest<i64>,), i64>(
+            "sum-varargs-all",
+            Arity::AtLeast(0),
+            sum_all,
+        );
+
+        let expr = parse_scheme("(sum-varargs-all 1 2 3 4)").unwrap();
+        let result = eval(&expr, &mut env).unwrap();
+        assert_eq!(result, Value::Number(10));
+    }
+
+    #[test]
+    fn test_register_builtin_operation_varargs_fixed_plus_rest() {
+        fn weighted_sum(weight: i64, nums: Rest<i64>) -> i64 {
+            weight * nums.iter().copied().sum::<i64>()
+        }
+
+        let mut env = create_global_env();
+        env.register_variadic_builtin_operation::<_, (i64, Rest<i64>), i64>(
+            "weighted-sum",
+            Arity::AtLeast(1),
+            weighted_sum,
+        );
+
+        let expr = parse_scheme("(weighted-sum 2 1 2 3)").unwrap();
+        let result = eval(&expr, &mut env).unwrap();
+        assert_eq!(result, Value::Number(12));
+    }
+
+    #[test]
+    fn test_register_variadic_builtin_operation_with_explicit_arity() {
+        fn sum_all(nums: Rest<i64>) -> i64 {
+            nums.iter().copied().sum()
+        }
+
+        let mut env = create_global_env();
+        env.register_variadic_builtin_operation::<_, (Rest<i64>,), i64>(
+            "sum-all-min1",
+            Arity::AtLeast(1),
+            sum_all,
+        );
+
+        // Valid call: three numeric arguments.
+        let expr_ok = parse_scheme("(sum-all-min1 1 2 3)").unwrap();
+        let result_ok = eval(&expr_ok, &mut env).unwrap();
+        assert_eq!(result_ok, Value::Number(6));
+
+        // Invalid call: zero arguments should fail Arity::AtLeast(1).
+        let expr_err = parse_scheme("(sum-all-min1)").unwrap();
+        let err = eval(&expr_err, &mut env).unwrap_err();
+        match err {
+            crate::Error::ArityError { .. } => {}
+            other => panic!("expected ArityError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_comparison_dynamic_uses_typed_mechanism() {
+        let mut env = create_global_env();
+
+        // Dynamic higher-order use of a builtin comparison: the `>`
+        // operator is passed as a value and called with three
+        // arguments. This exercises dynamic builtin calls through
+        // the environment using the shared builtin registry.
+        let expr = parse_scheme("((lambda (op a b c) (op a b c)) > 9 6 2)").unwrap();
+        let result = eval(&expr, &mut env).unwrap();
+        assert_eq!(result, Value::Bool(true));
+
+        let expr_false = parse_scheme("((lambda (op a b c) (op a b c)) > 9 6 7)").unwrap();
+        let result_false = eval(&expr_false, &mut env).unwrap();
+        assert_eq!(result_false, Value::Bool(false));
+    }
 
     /// Test result variants for comprehensive testing
     #[derive(Debug)]

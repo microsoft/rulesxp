@@ -7,8 +7,8 @@
 /// types, making it easy to build Values from Rust literals, arrays, slices, and
 /// vectors. Equality and display logic are customized to match Scheme semantics, including
 /// round-trip compatibility for precompiled operations.
-use crate::Error;
 use crate::builtinops::BuiltinOp;
+use crate::intooperation::OperationFn;
 
 /// Type alias for number values in interpreter
 pub(crate) type NumberType = i64;
@@ -55,7 +55,7 @@ pub(crate) fn is_valid_symbol(name: &str) -> bool {
 /// - `val(42)` for values, `sym("name")` for symbols, `nil()` for empty lists
 /// - `val([1, 2, 3])` for homogeneous lists
 /// - `val(vec![sym("op"), val(42)])` for mixed lists
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Value {
     /// Numbers (integers only)
     Number(NumberType),
@@ -77,7 +77,10 @@ pub enum Value {
     /// Uses id string for equality comparison instead of function pointer
     BuiltinFunction {
         id: String,
-        func: fn(&[Value]) -> Result<Value, Error>,
+        // Stored as an Arc to allow dynamic wrapping of typed Rust functions/closures.
+        // Trait object enables registering strongly typed functions (e.g. fn(i64, i64)->i64)
+        // that are automatically converted to the canonical evaluator signature.
+        func: std::sync::Arc<OperationFn>,
     },
     /// User-defined functions (params, body, closure env)
     Function {
@@ -88,6 +91,42 @@ pub enum Value {
     /// Unspecified values (e.g., return value of define)
     /// These values never equal themselves or any other value
     Unspecified,
+}
+
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Number(n) => write!(f, "Number({n})"),
+            Value::Symbol(s) => write!(f, "Symbol({s})"),
+            Value::String(s) => write!(f, "String(\"{s}\")"),
+            Value::Bool(b) => write!(f, "Bool({b})"),
+            Value::List(list) => {
+                write!(f, "List(")?;
+                for (i, v) in list.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{:?}", v)?;
+                }
+                write!(f, ")")
+            }
+            Value::PrecompiledOp { op_id, args, .. } => {
+                write!(f, "PrecompiledOp({op_id}, args=[")?;
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{:?}", a)?;
+                }
+                write!(f, "])")
+            }
+            Value::BuiltinFunction { id, .. } => write!(f, "BuiltinFunction({id})"),
+            Value::Function { params, body, .. } => {
+                write!(f, "Function(params={params:?}, body={:?})", body)
+            }
+            Value::Unspecified => write!(f, "Unspecified"),
+        }
+    }
 }
 
 // From trait implementations for Value - enables .into() conversion

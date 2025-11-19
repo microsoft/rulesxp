@@ -87,6 +87,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Registering Custom Builtins
+
+You can extend the evaluator with your own builtins. There are two
+APIs, both of which end up using the same underlying machinery:
+
+1. **Raw slice API** (closest to the core engine):
+
+```rust
+use rulesxp::ast::Value;
+use rulesxp::evaluator::{create_global_env, Environment};
+use rulesxp::Error;
+
+fn my_custom_function(args: &[Value]) -> Result<Value, Error> {
+    println!("called with {} args", args.len());
+    Ok(Value::Unspecified)
+}
+
+let mut env: Environment = create_global_env();
+env.register_builtin_function("my-func", my_custom_function);
+// Now (my-func) / {"my-func": [...]} can be used from Scheme / JSONLogic
+```
+
+2. **Typed API** (ergonomic Rust signatures, automatic conversion):
+
+```rust
+use rulesxp::ast::Value;
+use rulesxp::evaluator::{create_global_env, Environment};
+
+// Fixed arity: arguments are converted from `Value` automatically
+fn add2(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+// Zero-argument builtin
+fn forty_two() -> i64 { 42 }
+
+// List argument converted to a slice of `Value`
+fn first_and_list_len(args: &[Value]) -> Value {
+    Value::List(vec![
+        args.first().cloned().unwrap_or(Value::Unspecified),
+        Value::Number(args.len() as i64),
+    ])
+}
+
+let mut env: Environment = create_global_env();
+env.register_builtin_operation("add2", add2);
+env.register_builtin_operation("forty-two", forty_two);
+env.register_builtin_operation("first-and-len", first_and_list_len);
+
+// These builtins are then available from evaluated expressions
+```
+
+The typed API currently supports:
+
+- **Parameter types**: `i64`, `bool`, `&str`, borrowed values `&Value`,
+    and list arguments via slices such as `&[i64]`, `&[bool]`, `&[&str]`,
+    and `&[Value]` (when the call site passes a list value).
+- **Return types**: any type implementing the internal `IntoValue` trait
+    (currently `Value`, `i64`, `bool`, `String`, and `&str`), or
+    `Result<R, E>` where `R` is one of those and `E: Display`.
+
+Arity is enforced automatically; conversion errors become `TypeError`,
+and any user error from a `Result<_, E>` is wrapped into
+`Error::EvalError`.
+
 ### Command Line Tools
 
 #### Interactive REPL (a demo is also available)
