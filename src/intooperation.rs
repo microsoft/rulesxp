@@ -1,6 +1,7 @@
 use crate::Error;
 use crate::ast::Value;
 use std::fmt::Display;
+use std::iter::FusedIterator;
 use std::sync::Arc;
 
 /// Canonical erased builtin function type used by the evaluator.
@@ -12,162 +13,61 @@ pub type OperationFn = dyn Fn(Vec<Value>) -> Result<Value, Error> + Send + Sync;
 // =====================================================================
 // Internal machinery for fixed-arity argument conversion
 //
-// All `unsafe` in this crate is deliberately confined to this module.
-// The only primitive is `widen_slice_lifetime`, which is used by the
-// `FromParam` implementations for slice parameters and by the
-// variadic "rest" machinery for slice-like parameters. See the docs
-// on that function and on `FromParam` for the full safety argument
-// and the limitations in Rust's current type system that force this
-// design.
+// This module defines `FromParam`, which is used by the fixed-arity
+// adapters to turn AST `Value` nodes into strongly-typed Rust
+// parameters. All conversions are implemented here so that the
+// supported parameter types are easy to audit.
 // =====================================================================
-
-mod sealed {
-    //! Types that may be used as builtin parameters via `FromParam`.
-    //!
-    //! This `Sealed` trait prevents code outside this module from
-    //! implementing `FromParam`, which keeps the safety invariants
-    //! around `widen_slice_lifetime` local and auditable.
-    //!
-    //! To add a new builtin parameter type, you must:
-    //! - add it here, and
-    //! - add a matching `FromParam` implementation in this module.
-    //!
-    //! Slice-like types must be carefully reviewed, as they typically
-    //! rely on `widen_slice_lifetime` and its safety invariants.
-
-    pub trait Sealed {}
-
-    impl Sealed for &super::Value {}
-    impl Sealed for i64 {}
-    impl Sealed for bool {}
-    impl Sealed for &str {}
-    impl Sealed for &[i64] {}
-    impl Sealed for &[bool] {}
-    impl Sealed for &[&str] {}
-    impl Sealed for &[super::Value] {}
-}
 
 /// Core trait used by the fixed-arity adapters to turn `Value` nodes
 /// into strongly-typed parameters.
 ///
-/// This trait is **internal** to this module and sealed; the set of
-/// supported parameter types is fixed to those we explicitly impl it
-/// for above in `sealed`.
-///
-/// For example, a builtin like
-/// `fn sum(first: i64, rest: &[i64]) -> Result<i64, Error>`
-/// will be invoked via `FromParam` implementations for `i64` and
-/// `&[i64]`.
-///
-/// The associated `Storage<'a>` type gives each parameter kind a place
-/// to put temporary data (typically a `Vec<T>` for slice parameters).
-/// The `Param<'a>` family then describes the parameter type as seen by
-/// the builtin function for a given lifetime `'a` of the underlying
-/// AST `Value`s.
-///
-/// ### Why is there `unsafe` here?
-///
-/// For scalar parameters (`i64`, `bool`, `&str`, `&Value`) the
-/// implementation is entirely safe. For slice parameters like
-/// `&[i64]`, `&[bool]`, and `&[&str]` we must populate a `Vec<T>` and
-/// then hand the builtin a slice `&[T]` that appears to live for
-/// `Param<'a>`'s lifetime. In reality the slice is only valid for the
-/// duration of the adapter's stack frame that owns the `Vec<T>`.
-///
-/// The fixed-arity adapters call `FromParam::from_arg` inside a
-/// function that immediately invokes the builtin and then drops all
-/// `Storage` values before returning. Expressing "this reference is
-/// valid only for the body of this call" is not something Rust's
-/// current type system can do in a reusable trait, so we use a small
-/// `unsafe` helper to widen the slice lifetime while **relying on the
-/// calling pattern** to keep things sound.
-///
-/// Concretely, Rust today lacks:
-/// - a way to express an "intersection" lifetime like
-///   `min('vec, 'a)` for data borrowed from both a local `Vec<T>` and
-///   the input `&'a Value`;
-/// - the ability to state, in the trait, that `Param<'a>` values
-///   cannot outlive the specific adapter call that created them,
-///   even though the adapter is used under a higher-ranked
-///   `for<'a>` bound;
-/// - a safe standard-library abstraction that captures this
-///   "stack-bounded borrow from scratch space" pattern for slices.
-///
-/// Instead, we:
-/// - keep `FromParam` sealed and internal to this module;
-/// - centralise the `unsafe` in `widen_slice_lifetime` with a detailed
-///   `# Safety` explanation; and
-/// - structure the fixed-arity adapters so that `Param<'a>` is never
-///   stored or allowed to escape the call to the builtin.
-pub(crate) trait FromParam: sealed::Sealed {
-    /// Per-call scratch space, scoped to the lifetime of the argument
-    /// values. For scalar parameters this is typically `()`; for slices
-    /// it is usually a `Vec<T>` that we borrow from.
-    type Storage<'a>: Default;
-
+/// The associated `Param<'a>` type is the parameter type as seen by
+/// the builtin for a given lifetime of the local `Value` slots used
+/// during argument conversion.
+pub(crate) trait FromParam {
     /// The parameter type as seen by the builtin for a given lifetime
     /// of the underlying AST values.
     type Param<'a>;
 
     /// Convert a single AST argument into this parameter type.
-    fn from_arg<'a>(
-        value: &'a Value,
-        storage: &mut Self::Storage<'a>,
-    ) -> Result<Self::Param<'a>, Error>;
+    ///
+    /// Implementations may either borrow from the provided `Value`
+    /// (for types such as `&str` and the borrowed iterators), or
+    /// consume it by value (for `Value` itself).
+    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error>;
 }
 
-impl FromParam for &Value {
-    type Storage<'a> = ();
-    type Param<'a> = &'a Value;
+impl FromParam for Value {
+    type Param<'a> = Value;
 
-    fn from_arg<'a>(
-        value: &'a Value,
-        _storage: &mut Self::Storage<'a>,
-    ) -> Result<Self::Param<'a>, Error> {
-        Ok(value)
+    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error> {
+        // Move the `Value` out so that builtin functions can consume
+        // owned payloads (such as strings or lists) without cloning.
+        Ok(std::mem::replace(value, Value::Unspecified))
     }
 }
 
-impl FromParam for i64 {
-    type Storage<'a> = ();
-    type Param<'a> = i64;
+// Blanket implementation for by-value primitive parameters that can be
+// obtained from a `Value` via the standard `TryInto` trait. This covers
+// types such as `i64` and `bool` for which we provide
+// `impl TryInto<T> for Value` in `ast.rs`.
+impl<T> FromParam for T
+where
+    Value: std::convert::TryInto<T, Error = Error>,
+{
+    type Param<'a> = T;
 
-    fn from_arg<'a>(
-        value: &'a Value,
-        _storage: &mut Self::Storage<'a>,
-    ) -> Result<Self::Param<'a>, Error> {
-        if let Value::Number(n) = value {
-            Ok(*n)
-        } else {
-            Err(Error::TypeError("expected number".into()))
-        }
-    }
-}
-
-impl FromParam for bool {
-    type Storage<'a> = ();
-    type Param<'a> = bool;
-
-    fn from_arg<'a>(
-        value: &'a Value,
-        _storage: &mut Self::Storage<'a>,
-    ) -> Result<Self::Param<'a>, Error> {
-        if let Value::Bool(b) = value {
-            Ok(*b)
-        } else {
-            Err(Error::TypeError("expected boolean".into()))
-        }
+    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error> {
+        let owned = std::mem::replace(value, Value::Unspecified);
+        <Value as std::convert::TryInto<T>>::try_into(owned)
     }
 }
 
 impl FromParam for &str {
-    type Storage<'a> = ();
     type Param<'a> = &'a str;
 
-    fn from_arg<'a>(
-        value: &'a Value,
-        _storage: &mut Self::Storage<'a>,
-    ) -> Result<Self::Param<'a>, Error> {
+    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error> {
         if let Value::String(s) = value {
             Ok(s.as_str())
         } else {
@@ -176,172 +76,60 @@ impl FromParam for &str {
     }
 }
 
-/// Widen the lifetime of a slice to match the higher-ranked lifetime
-/// used by the fixed-arity adapters.
-///
-/// This function is the **only** place `unsafe` is used in the
-/// argument-conversion machinery. It is private to this module and is
-/// only called from `FromParam` and variadic rest-parameter
-/// implementations for slice-like parameters.
-///
-/// # Safety
-///
-/// - The caller must ensure that the returned reference does not
-///   outlive the stack frame that owns the backing storage of
-///   `slice` (typically a local `Vec<T>`).
-/// - In this module, that guarantee is provided by the fixed-arity
-///   `IntoOperation` implementations: they allocate all `Storage`
-///   values as locals, call `FromParam::from_arg` to create
-///   `Param<'a>` values, immediately invoke the builtin `F`, and then
-///   drop all `Storage` before returning.
-/// - `Param<'a>` values are never stored in the returned
-///   `OperationFn` closure or in any other longer-lived structure;
-///   they are passed directly to the builtin and then discarded.
-///
-/// Rust's type system cannot currently express this "stack-bounded
-/// borrow through a trait" pattern in a fully safe way, because the
-/// trait uses a higher-ranked lifetime `for<'a>` while the actual
-/// borrow from the local `Vec<T>` is tied to a particular call frame.
-/// The combination of sealing, centralising this helper, and the
-/// structure of the fixed-arity adapters is what makes this sound.
-fn widen_slice_lifetime<'short, 'long, T>(slice: &'short [T]) -> &'long [T] {
-    // SAFETY: Callers in this module uphold the safety contract above
-    // by never letting the returned reference escape the adapter call
-    // that owns the backing storage.
-    unsafe { &*(slice as *const [T]) }
-}
+// No slice-based `FromParam` implementations are provided in the
+// iterator-based design. If a builtin needs to work with lists or
+// rest-style arguments it should use the iterator-based parameters
+// defined below instead.
 
-/// Typed list parameters for fixed-arity functions: a single
-/// `Value::List` argument converted to a slice of elements.
-impl FromParam for &[i64] {
-    type Storage<'a> = Vec<i64>;
-    type Param<'a> = &'a [i64];
+// =====================================================================
+// FromParam support for iterator parameters (list arguments)
+// =====================================================================
 
-    fn from_arg<'a>(
-        value: &'a Value,
-        storage: &mut Self::Storage<'a>,
-    ) -> Result<Self::Param<'a>, Error> {
-        storage.clear();
-        let items = match value {
-            Value::List(items) => items,
-            _ => return Err(Error::TypeError("expected list".into())),
-        };
+impl<'b> FromParam for ValueListIterator<'b> {
+    type Param<'a> = ValueListIterator<'a>;
 
-        for item in items {
-            match item {
-                Value::Number(n) => storage.push(*n),
-                _ => return Err(Error::TypeError("expected number in list".into())),
-            }
-        }
-
-        let slice: &[i64] = storage.as_slice();
-        let slice: &'a [i64] = widen_slice_lifetime(slice);
-        Ok(slice)
-    }
-}
-
-impl FromParam for &[bool] {
-    type Storage<'a> = Vec<bool>;
-    type Param<'a> = &'a [bool];
-
-    fn from_arg<'a>(
-        value: &'a Value,
-        storage: &mut Self::Storage<'a>,
-    ) -> Result<Self::Param<'a>, Error> {
-        storage.clear();
-        let items = match value {
-            Value::List(items) => items,
-            _ => return Err(Error::TypeError("expected list".into())),
-        };
-
-        for item in items {
-            match item {
-                Value::Bool(b) => storage.push(*b),
-                _ => return Err(Error::TypeError("expected boolean in list".into())),
-            }
-        }
-
-        let slice: &[bool] = storage.as_slice();
-        let slice: &'a [bool] = widen_slice_lifetime(slice);
-        Ok(slice)
-    }
-}
-
-impl FromParam for &[&str] {
-    type Storage<'a> = Vec<&'a str>;
-    type Param<'a> = &'a [&'a str];
-
-    fn from_arg<'a>(
-        value: &'a Value,
-        storage: &mut Self::Storage<'a>,
-    ) -> Result<Self::Param<'a>, Error> {
-        storage.clear();
-        let items = match value {
-            Value::List(items) => items,
-            _ => return Err(Error::TypeError("expected list".into())),
-        };
-
-        for item in items {
-            match item {
-                Value::String(s) => storage.push(s.as_str()),
-                _ => return Err(Error::TypeError("expected string in list".into())),
-            }
-        }
-
-        let slice: &[&str] = storage.as_slice();
-        let slice: &'a [&'a str] = widen_slice_lifetime(slice);
-        Ok(slice)
-    }
-}
-
-impl FromParam for &[Value] {
-    type Storage<'a> = ();
-    type Param<'a> = &'a [Value];
-
-    fn from_arg<'a>(
-        value: &'a Value,
-        _storage: &mut Self::Storage<'a>,
-    ) -> Result<Self::Param<'a>, Error> {
+    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error> {
         if let Value::List(items) = value {
-            Ok(items.as_slice())
+            Ok(ValueListIterator::new(items.as_slice()))
         } else {
             Err(Error::TypeError("expected list".into()))
         }
     }
 }
 
-/// Convert strongly-typed Rust results into AST values.
-pub trait IntoValue {
-    fn into_value(self) -> Value;
-}
+impl<'b> FromParam for NumIterator<'b> {
+    type Param<'a> = NumIterator<'a>;
 
-impl IntoValue for Value {
-    fn into_value(self) -> Value {
-        self
+    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error> {
+        if let Value::List(items) = value {
+            NumIterator::new(items.as_slice())
+        } else {
+            Err(Error::TypeError("expected list".into()))
+        }
     }
 }
 
-impl IntoValue for i64 {
-    fn into_value(self) -> Value {
-        Value::Number(self)
+impl<'b> FromParam for BoolIterator<'b> {
+    type Param<'a> = BoolIterator<'a>;
+
+    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error> {
+        if let Value::List(items) = value {
+            BoolIterator::new(items.as_slice())
+        } else {
+            Err(Error::TypeError("expected list".into()))
+        }
     }
 }
 
-impl IntoValue for bool {
-    fn into_value(self) -> Value {
-        Value::Bool(self)
-    }
-}
+impl<'b> FromParam for StringIterator<'b> {
+    type Param<'a> = StringIterator<'a>;
 
-impl IntoValue for String {
-    fn into_value(self) -> Value {
-        Value::String(self)
-    }
-}
-
-impl IntoValue for &str {
-    fn into_value(self) -> Value {
-        Value::String(self.to_owned())
+    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error> {
+        if let Value::List(items) = value {
+            StringIterator::new(items.as_slice())
+        } else {
+            Err(Error::TypeError("expected list".into()))
+        }
     }
 }
 
@@ -350,10 +138,7 @@ pub trait IntoResult<T> {
     fn into_result(self) -> Result<T, Error>;
 }
 
-impl<T> IntoResult<T> for T
-where
-    T: IntoValue,
-{
+impl<T> IntoResult<T> for T {
     fn into_result(self) -> Result<T, Error> {
         Ok(self)
     }
@@ -368,60 +153,247 @@ where
     }
 }
 
-/// Marker type for variadic "rest" parameters.
+// =====================================================================
+// Iterator-based parameter types
+// =====================================================================
+
+/// Borrowed iterator over a sequence of AST `Value` references.
 ///
-/// `Rest<T>` is a thin newtype over `Vec<T>` that behaves like a
-/// slice via `Deref`/`AsRef`. Variadic adapters simply build a fresh
-/// `Vec<T>` for the rest arguments and pass it to the user function;
-/// no unsafe code or lifetime juggling is required.
-#[derive(Debug, Clone)]
-pub struct Rest<T> {
-    items: Vec<T>,
+/// This is the shared base type for all list/sequence-parameter
+/// iterators. Typed iterators such as [`NumIterator`], [`BoolIterator`]
+/// and [`StringIterator`] wrap this to provide element-level typing.
+#[derive(Debug, Clone, Copy)]
+pub struct ValueListIterator<'a> {
+    values: &'a [Value],
+    index: usize,
 }
 
-impl<T> Rest<T> {
-    pub(crate) fn new(items: Vec<T>) -> Self {
-        Rest { items }
-    }
-
-    /// Borrow the rest arguments as a slice.
-    pub fn as_slice(&self) -> &[T] {
-        &self.items
-    }
-
-    /// Consume the wrapper and return the owned vector of rest
-    /// arguments.
-    pub fn into_vec(self) -> Vec<T> {
-        self.items
+impl<'a> ValueListIterator<'a> {
+    pub(crate) fn new(values: &'a [Value]) -> Self {
+        ValueListIterator { values, index: 0 }
     }
 }
 
-impl<T> std::ops::Deref for Rest<T> {
-    type Target = [T];
+impl<'a> Iterator for ValueListIterator<'a> {
+    type Item = &'a Value;
 
-    fn deref(&self) -> &Self::Target {
-        &self.items
+    fn next(&mut self) -> Option<Self::Item> {
+        let v = self.values.get(self.index)?;
+        self.index += 1;
+        Some(v)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.values.len().saturating_sub(self.index);
+        (remaining, Some(remaining))
     }
 }
 
-impl<T> AsRef<[T]> for Rest<T> {
-    fn as_ref(&self) -> &[T] {
-        &self.items
+impl<'a> ExactSizeIterator for ValueListIterator<'a> {}
+impl<'a> FusedIterator for ValueListIterator<'a> {}
+
+/// Borrowed iterator over numeric arguments, performing type checking
+/// as elements are pulled. Internally this wraps a [`ValueListIterator`]
+/// and narrows each element to `i64`.
+#[derive(Debug, Clone, Copy)]
+pub struct NumIterator<'a> {
+    inner: ValueListIterator<'a>,
+}
+
+impl<'a> NumIterator<'a> {
+    /// Build a numeric iterator over the provided values, performing a
+    /// single upfront type check that all elements are numbers.
+    pub(crate) fn new(values: &'a [Value]) -> Result<Self, Error> {
+        for v in values {
+            if !matches!(v, Value::Number(_)) {
+                return Err(Error::TypeError("expected number".into()));
+            }
+        }
+
+        Ok(NumIterator {
+            inner: ValueListIterator::new(values),
+        })
     }
 }
 
-/// Internal trait used by the variadic adapters to convert the tail
-/// of the argument list into a typed rest parameter.
+impl<'a> Iterator for NumIterator<'a> {
+    type Item = i64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let v = self.inner.next()?;
+
+        if let Value::Number(n) = v {
+            Some(*n)
+        } else {
+            // `new` guarantees all elements are numbers.
+            debug_assert!(false, "NumIterator saw non-number after construction");
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<'a> ExactSizeIterator for NumIterator<'a> {}
+impl<'a> FusedIterator for NumIterator<'a> {}
+
+/// Borrowed iterator over boolean arguments, performing type checking
+/// as elements are pulled. Internally this wraps a
+/// [`ValueListIterator`] and narrows each element to `bool`.
+#[derive(Debug, Clone, Copy)]
+pub struct BoolIterator<'a> {
+    inner: ValueListIterator<'a>,
+}
+
+impl<'a> BoolIterator<'a> {
+    /// Build a boolean iterator over the provided values, performing a
+    /// single upfront type check that all elements are booleans.
+    pub(crate) fn new(values: &'a [Value]) -> Result<Self, Error> {
+        for v in values {
+            if !matches!(v, Value::Bool(_)) {
+                return Err(Error::TypeError("expected boolean".into()));
+            }
+        }
+
+        Ok(BoolIterator {
+            inner: ValueListIterator::new(values),
+        })
+    }
+}
+
+impl<'a> Iterator for BoolIterator<'a> {
+    type Item = bool;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let v = self.inner.next()?;
+
+        if let Value::Bool(b) = v {
+            Some(*b)
+        } else {
+            // `new` guarantees all elements are booleans.
+            debug_assert!(false, "BoolIterator saw non-boolean after construction");
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<'a> ExactSizeIterator for BoolIterator<'a> {}
+impl<'a> FusedIterator for BoolIterator<'a> {}
+
+/// Borrowed iterator over string arguments, performing type checking
+/// as elements are pulled. Internally this wraps a
+/// [`ValueListIterator`] and narrows each element to `&str`.
+#[derive(Debug, Clone, Copy)]
+pub struct StringIterator<'a> {
+    inner: ValueListIterator<'a>,
+}
+
+impl<'a> StringIterator<'a> {
+    /// Build a string iterator over the provided values, performing a
+    /// single upfront type check that all elements are strings.
+    pub(crate) fn new(values: &'a [Value]) -> Result<Self, Error> {
+        for v in values {
+            if !matches!(v, Value::String(_)) {
+                return Err(Error::TypeError("expected string".into()));
+            }
+        }
+
+        Ok(StringIterator {
+            inner: ValueListIterator::new(values),
+        })
+    }
+}
+
+impl<'a> Iterator for StringIterator<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let v = self.inner.next()?;
+
+        if let Value::String(s) = v {
+            Some(s.as_str())
+        } else {
+            // `new` guarantees all elements are strings.
+            debug_assert!(false, "StringIterator saw non-string after construction");
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<'a> ExactSizeIterator for StringIterator<'a> {}
+impl<'a> FusedIterator for StringIterator<'a> {}
+
+// =====================================================================
+// Rest-parameter support for variadic operations
+// =====================================================================
+
+/// Core trait used to construct rest-parameter values from a slice of
+/// AST arguments.
 ///
-/// The associated `Param<'a>` type is generic over the lifetime of the
-/// underlying argument slice. Implementations for owned element types
-/// (`Rest<i64>`, `Rest<bool>`) allocate a fresh `Vec<T>`; borrowed
-/// variants like `Rest<&str>` borrow directly from the `Value`s.
-trait FromRestParam {
+/// The associated `Param<'a>` is the type actually seen by the builtin
+/// function for a given lifetime of the underlying value slice.
+pub(crate) trait FromRest {
     type Param<'a>;
 
-    fn from_rest<'a>(values: &'a [Value]) -> Result<Self::Param<'a>, Error>;
+    fn from_rest<'a>(slice: &'a [Value]) -> Result<Self::Param<'a>, Error>;
 }
+
+impl FromRest for ValueListIterator<'static> {
+    type Param<'a> = ValueListIterator<'a>;
+
+    fn from_rest<'a>(slice: &'a [Value]) -> Result<Self::Param<'a>, Error> {
+        Ok(ValueListIterator::new(slice))
+    }
+}
+
+impl FromRest for NumIterator<'static> {
+    type Param<'a> = NumIterator<'a>;
+
+    fn from_rest<'a>(slice: &'a [Value]) -> Result<Self::Param<'a>, Error> {
+        NumIterator::new(slice)
+    }
+}
+
+impl FromRest for BoolIterator<'static> {
+    type Param<'a> = BoolIterator<'a>;
+
+    fn from_rest<'a>(slice: &'a [Value]) -> Result<Self::Param<'a>, Error> {
+        BoolIterator::new(slice)
+    }
+}
+
+impl FromRest for StringIterator<'static> {
+    type Param<'a> = StringIterator<'a>;
+
+    fn from_rest<'a>(slice: &'a [Value]) -> Result<Self::Param<'a>, Error> {
+        StringIterator::new(slice)
+    }
+}
+
+/// Marker type used in `Args` tuples to indicate that a parameter
+/// position is populated from the variadic "rest" arguments using
+/// [`FromRest`].
+#[derive(Debug, Clone, Copy)]
+pub struct Rest<I>(std::marker::PhantomData<I>);
+
+// Convenience aliases for common rest-parameter iterator types used in
+// tests and documentation. These are only used at the type level; the
+// actual parameters seen by builtin functions are the lifetime-
+// parameterised iterator types above.
+pub type ValuesRest = Rest<ValueListIterator<'static>>;
+pub type NumRest = Rest<NumIterator<'static>>;
+pub type BoolRest = Rest<BoolIterator<'static>>;
+pub type StringRest = Rest<StringIterator<'static>>;
 
 /// Convert a strongly-typed Rust function or closure into the erased
 /// [`OperationFn`], parameterized by an argument tuple type.
@@ -429,248 +401,78 @@ pub trait IntoOperation<Args, R> {
     fn into_operation(self) -> Arc<OperationFn>;
 }
 
-/// Marker trait for fixed-arity operations (no rest parameters).
-///
-/// Implemented for Rust functions and closures whose arguments are
-/// drawn from types implementing [`FromParam`]. This is a thin wrapper
-/// over [`IntoOperation`] so that the evaluator API can distinguish
-/// fixed-arity from variadic registrations.
-pub trait IntoFixedOperation<Args, R>: IntoOperation<Args, R> {}
-
-impl<F, Args, R> IntoFixedOperation<Args, R> for F where F: IntoOperation<Args, R> {}
-
 /// Trait for operations registered via the variadic API.
 ///
 /// Implemented for functions whose Rust signature includes a variadic
-/// "rest" parameter, expressed using the [`Rest`] marker type in the
-/// last position of the argument tuple.
+/// "rest" parameter, expressed using the iterator types defined in
+/// this module (`ValueListIterator<'a>`, `NumIterator<'a>`,
+/// `BoolIterator<'a>`, or `StringIterator<'a>`), optionally after a
+/// fixed prefix of `FromParam` parameters.
 pub trait IntoVariadicOperation<Args, R> {
     fn into_variadic_operation(self) -> Arc<OperationFn>;
 }
 
 // =====================================================================
-// Variadic helpers used by Rest-based adapters
+// Variadic adapters using iterator-based rest parameters
 // =====================================================================
 
-// --- `FromRestParam` implementations for supported rest element types ---
-
-// Numeric rest parameter: collects all numeric arguments into an owned
-// `Vec<i64>` for convenient processing.
-impl FromRestParam for Rest<i64> {
-    type Param<'a> = Rest<i64>;
-
-    fn from_rest<'a>(values: &'a [Value]) -> Result<Self::Param<'a>, Error> {
-        let mut nums: Vec<i64> = Vec::new();
-
-        for v in values {
-            match v {
-                Value::Number(n) => nums.push(*n),
-                _ => return Err(Error::TypeError("expected number".into())),
-            }
-        }
-
-        Ok(Rest::new(nums))
-    }
-}
-
-// Boolean rest parameter: collects all boolean arguments into an owned
-// `Vec<bool>`.
-impl FromRestParam for Rest<bool> {
-    type Param<'a> = Rest<bool>;
-
-    fn from_rest<'a>(values: &'a [Value]) -> Result<Self::Param<'a>, Error> {
-        let mut bools: Vec<bool> = Vec::new();
-
-        for v in values {
-            match v {
-                Value::Bool(b) => bools.push(*b),
-                _ => return Err(Error::TypeError("expected boolean".into())),
-            }
-        }
-
-        Ok(Rest::new(bools))
-    }
-}
-// Borrowed string rest parameter: builds a `Rest<&str>` borrowing string
-// slices directly from the argument values.
-impl FromRestParam for Rest<&str> {
-    type Param<'a> = Rest<&'a str>;
-
-    fn from_rest<'a>(values: &'a [Value]) -> Result<Self::Param<'a>, Error> {
-        let mut items: Vec<&'a str> = Vec::new();
-
-        for v in values {
-            match v {
-                Value::String(s) => items.push(s.as_str()),
-                _ => return Err(Error::TypeError("expected string".into())),
-            }
-        }
-
-        Ok(Rest::new(items))
-    }
-}
-
-// --- 0-arg prefix: functions that see all args as the rest parameter ---
-
-// Specialised implementation for `Rest<Value>` that **consumes** the
-// incoming `Vec<Value>` without cloning. This is the most direct and
-// allocation-free way to expose variadic arguments when the builtin is
-// happy to own the `Value`s.
-impl<F, FR, R> IntoVariadicOperation<(Rest<Value>,), R> for F
+/// Adapter for functions whose Rust signature consists only of a rest
+/// parameter expressed via one of the iterator types in this module
+/// (e.g. `ValueListIterator<'a>`, `NumIterator<'a>`, etc.).
+impl<F, FR, R, I> IntoVariadicOperation<(Rest<I>,), R> for F
 where
-    F: Fn(Rest<Value>) -> FR + Send + Sync + 'static,
+    I: FromRest,
+    F: for<'a> Fn(<I as FromRest>::Param<'a>) -> FR + Send + Sync + 'static,
     FR: IntoResult<R> + 'static,
-    R: IntoValue + 'static,
+    R: Into<Value> + 'static,
 {
     fn into_variadic_operation(self) -> Arc<OperationFn> {
         Arc::new(move |args: Vec<Value>| {
-            (|| {
-                let rest_param = Rest::new(args);
-                let result: FR = (self)(rest_param);
-                let value: R = result.into_result()?;
-                Ok(value.into_value())
-            })()
+            let rest_param: <I as FromRest>::Param<'_> = <I as FromRest>::from_rest(&args[..])?;
+            let result: FR = (self)(rest_param);
+            let value: R = result.into_result()?;
+            Ok(value.into())
         })
     }
 }
 
-// Generic implementation for rest-only functions using element types
-// such as `Rest<i64>`, `Rest<bool>`, or `Rest<&str>`, built from a
-// borrowed slice of the argument `Value`s via `FromRestParam`.
-impl<F, FR, R, RestT> IntoVariadicOperation<(RestT,), R> for F
-where
-    RestT: FromRestParam,
-    F: for<'a> Fn(<RestT as FromRestParam>::Param<'a>) -> FR + Send + Sync + 'static,
-    FR: IntoResult<R> + 'static,
-    R: IntoValue + 'static,
-{
-    fn into_variadic_operation(self) -> Arc<OperationFn> {
-        Arc::new(move |args: Vec<Value>| {
-            (|| {
-                let rest_param = <RestT as FromRestParam>::from_rest(&args[..])?;
-                let result: FR = (self)(rest_param);
-                let value: R = result.into_result()?;
-                Ok(value.into_value())
-            })()
-        })
-    }
-}
-
-/// Helper macro to implement `IntoVariadicOperation` for functions with a fixed
-/// prefix followed by a `Rest<_>` parameter in the last position.
-///
-/// The fixed prefix is handled via `FromParam` in exactly the same way
-/// as the non-variadic adapters. The rest parameter is constructed via
-/// `FromRestParam` from the remaining arguments.
+/// Helper macro to implement `IntoVariadicOperation` for functions with
+/// a fixed prefix of `FromParam` parameters followed by a single rest
+/// parameter expressed using one of the iterator types in this module.
 macro_rules! impl_into_variadic_operation_for_prefix_and_rest {
-    ($prefix:expr, $( $idx:tt => $v:ident, $p:ident : $A:ident ),+ ) => {
-        impl<F, FR, R, RestT, $( $A ),+> IntoVariadicOperation<($( $A, )+ RestT,), R> for F
+    ($prefix:expr, $( $v:ident, $p:ident : $A:ident ),+ ) => {
+        impl<F, FR, R, I, $( $A ),+> IntoVariadicOperation<( $( $A, )+ Rest<I>, ), R> for F
         where
-            RestT: FromRestParam,
+            I: FromRest,
             $( $A: FromParam, )+
             F: for<'a> Fn(
                     $( <$A as FromParam>::Param<'a> ),+,
-                    <RestT as FromRestParam>::Param<'a>,
+                    <I as FromRest>::Param<'a>,
                 ) -> FR
                 + Send
                 + Sync
                 + 'static,
             FR: IntoResult<R> + 'static,
-            R: IntoValue + 'static,
-        {
-            fn into_variadic_operation(self) -> Arc<OperationFn> {
-                Arc::new(move |args: Vec<Value>| {
-                    match &args[..] {
-                        [ $( $v ),+, rest @ .. ] => {
-                            (|| {
-                                let mut prefix_storage: (
-                                    $( <$A as FromParam>::Storage<'_>, )+
-                                ) = Default::default();
-
-                                $(
-                                    let $p: <$A as FromParam>::Param<'_> =
-                                        <$A as FromParam>::from_arg(
-                                            $v,
-                                            &mut prefix_storage.$idx,
-                                        )?;
-                                )+
-
-                                let rest_param = <RestT as FromRestParam>::from_rest(rest)?;
-
-                                let result: FR = (self)( $( $p ),+, rest_param );
-                                let value: R = result.into_result()?;
-                                Ok(value.into_value())
-                            })()
-                        }
-                        _ => Err(Error::arity_error($prefix, args.len())),
-                    }
-                })
-            }
-        }
-    };
-}
-
-impl_into_variadic_operation_for_prefix_and_rest!(1, 0 => v0, p0: A1);
-impl_into_variadic_operation_for_prefix_and_rest!(2, 0 => v0, p0: A1, 1 => v1, p1: A2);
-impl_into_variadic_operation_for_prefix_and_rest!(3, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3);
-impl_into_variadic_operation_for_prefix_and_rest!(4, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4);
-impl_into_variadic_operation_for_prefix_and_rest!(5, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4, 4 => v4, p4: A5);
-impl_into_variadic_operation_for_prefix_and_rest!(6, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4, 4 => v4, p4: A5, 5 => v5, p5: A6);
-impl_into_variadic_operation_for_prefix_and_rest!(7, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4, 4 => v4, p4: A5, 5 => v5, p5: A6, 6 => v6, p6: A7);
-
-/// Specialised prefix+rest implementations for `Rest<Value>` that
-/// **consume** the incoming `Vec<Value>` tail without cloning. These
-/// mirror the generic `impl_into_variadic_operation_for_prefix_and_rest`
-/// macros but use `Vec::split_off` to move the rest arguments into a
-/// fresh `Vec<Value>` that backs the `Rest<Value>` parameter.
-macro_rules! impl_into_variadic_operation_for_prefix_and_rest_value {
-    ($prefix:expr, $( $idx:tt => $v:ident, $p:ident : $A:ident ),+ ) => {
-        impl<F, FR, R, $( $A ),+> IntoVariadicOperation<($( $A, )+ Rest<Value>,), R> for F
-        where
-            $( $A: FromParam, )+
-            F: for<'a> Fn(
-                    $( <$A as FromParam>::Param<'a> ),+,
-                    Rest<Value>,
-                ) -> FR
-                + Send
-                + Sync
-                + 'static,
-            FR: IntoResult<R> + 'static,
-            R: IntoValue + 'static,
+            R: Into<Value> + 'static,
         {
             fn into_variadic_operation(self) -> Arc<OperationFn> {
                 Arc::new(move |mut args: Vec<Value>| {
-                    if args.len() < $prefix {
-                        return Err(Error::arity_error($prefix, args.len()));
-                    }
+                    let len = args.len();
+                    match args.as_mut_slice() {
+                        &mut [ $( ref mut $v ),+, ref mut rest @ .. ] => {
+                            $(
+                                let $p: <$A as FromParam>::Param<'_> =
+                                    <$A as FromParam>::from_arg($v)?;
+                            )+
 
-                    // Move the tail values into a fresh Vec backing
-                    // the `Rest<Value>` parameter, leaving the prefix
-                    // values in-place for `FromParam` to borrow from.
-                    let rest_values = args.split_off($prefix);
+                            let rest_param: <I as FromRest>::Param<'_> =
+                                <I as FromRest>::from_rest(&*rest)?;
 
-                    match &args[..] {
-                        [ $( $v ),+ ] => {
-                            (|| {
-                                let mut prefix_storage: (
-                                    $( <$A as FromParam>::Storage<'_>, )+
-                                ) = Default::default();
-
-                                $(
-                                    let $p: <$A as FromParam>::Param<'_> =
-                                        <$A as FromParam>::from_arg(
-                                            $v,
-                                            &mut prefix_storage.$idx,
-                                        )?;
-                                )+
-
-                                let rest_param = Rest::new(rest_values);
-                                let result: FR = (self)( $( $p ),+, rest_param );
-                                let value: R = result.into_result()?;
-                                Ok(value.into_value())
-                            })()
+                            let result: FR = (self)( $( $p ),+, rest_param );
+                            let value: R = result.into_result()?;
+                            Ok(value.into())
                         }
-                        _ => Err(Error::arity_error($prefix, args.len())),
+                        _ => Err(Error::arity_error($prefix, len)),
                     }
                 })
             }
@@ -678,75 +480,52 @@ macro_rules! impl_into_variadic_operation_for_prefix_and_rest_value {
     };
 }
 
-impl_into_variadic_operation_for_prefix_and_rest_value!(1, 0 => v0, p0: A1);
-impl_into_variadic_operation_for_prefix_and_rest_value!(2, 0 => v0, p0: A1, 1 => v1, p1: A2);
-impl_into_variadic_operation_for_prefix_and_rest_value!(3, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3);
-impl_into_variadic_operation_for_prefix_and_rest_value!(4, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4);
-impl_into_variadic_operation_for_prefix_and_rest_value!(5, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4, 4 => v4, p4: A5);
-impl_into_variadic_operation_for_prefix_and_rest_value!(6, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4, 4 => v4, p4: A5, 5 => v5, p5: A6);
-impl_into_variadic_operation_for_prefix_and_rest_value!(7, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4, 4 => v4, p4: A5, 5 => v5, p5: A6, 6 => v6, p6: A7);
+impl_into_variadic_operation_for_prefix_and_rest!(1, v0, p0: A1);
+impl_into_variadic_operation_for_prefix_and_rest!(2, v0, p0: A1, v1, p1: A2);
+impl_into_variadic_operation_for_prefix_and_rest!(3, v0, p0: A1, v1, p1: A2, v2, p2: A3);
+impl_into_variadic_operation_for_prefix_and_rest!(4, v0, p0: A1, v1, p1: A2, v2, p2: A3, v3, p3: A4);
+impl_into_variadic_operation_for_prefix_and_rest!(5, v0, p0: A1, v1, p1: A2, v2, p2: A3, v3, p3: A4, v4, p4: A5);
+impl_into_variadic_operation_for_prefix_and_rest!(6, v0, p0: A1, v1, p1: A2, v2, p2: A3, v3, p3: A4, v4, p4: A5, v5, p5: A6);
+impl_into_variadic_operation_for_prefix_and_rest!(7, v0, p0: A1, v1, p1: A2, v2, p2: A3, v3, p3: A4, v4, p4: A5, v5, p5: A6, v6, p6: A7);
 
 // =====================================================================
 // Fixed-arity adapters
 // =====================================================================
 
 /// Helper macro to implement `IntoOperation` for functions of various
-/// arities using pattern matching on the argument slice.
+/// arities.
 ///
-/// This macro preserves the safety invariants relied upon by
-/// `FromParam` and `widen_slice_lifetime` by:
-/// - allocating all `Storage` values as locals inside the adapter;
-/// - calling `FromParam::from_arg` to build `Param<'_>` for each
-///   argument;
-/// - immediately invoking the builtin function `F` with those
-///   parameters; and
-/// - dropping all storage before returning.
-///
-/// It also avoids the cascade of `get/expect` indexing by matching on
-/// `&args[..]` to perform arity checking and destructuring in one
-/// place.
-///
-/// This macro is the only place `FromParam::from_arg` is used for
-/// fixed-arity builtins, so its structure (local storage tuple plus
-/// immediate call) is part of the safety contract described on
-/// `widen_slice_lifetime`.
+/// It performs arity checking up front, then destructures the owned
+/// `Vec<Value>` into local `Value` slots so that `FromParam` can either
+/// borrow from or consume each argument as needed before invoking the
+/// builtin function.
 macro_rules! impl_into_operation_for_arity {
-    ($arity:expr, $( $idx:tt => $v:ident, $p:ident : $A:ident ),+ ) => {
-        impl<F, FR, R, $( $A ),+> IntoOperation<($( $A, )+), R> for F
+    ($arity:expr, $( $v:ident, $p:ident : $A:ident ),+ ) => {
+        impl<F, FR, R, $( $A ),+> IntoOperation<( $( $A, )+ ), R> for F
         where
             F: for<'a> Fn( $( <$A as FromParam>::Param<'a> ),+ ) -> FR
                 + Send
                 + Sync
                 + 'static,
             FR: IntoResult<R> + 'static,
-            R: IntoValue + 'static,
+            R: Into<Value> + 'static,
             $( $A: FromParam, )+
         {
             fn into_operation(self) -> Arc<OperationFn> {
-                Arc::new(move |args: Vec<Value>| {
-                    match &args[..] {
-                        [ $( $v ),+ ] => {
-                            (|| {
-                                // Tuple of per-argument storage; for arity 1 this is a 1-tuple
-                                // `(<A1 as FromParam>::Storage<'_>,)`.
-                                let mut storage: (
-                                    $( <$A as FromParam>::Storage<'_>, )+
-                                ) = Default::default();
+                Arc::new(move |mut args: Vec<Value>| {
+                    let len = args.len();
+                    match args.as_mut_slice() {
+                        &mut [ $( ref mut $v ),+ ] => {
+                            $(
+                                let $p: <$A as FromParam>::Param<'_> =
+                                    <$A as FromParam>::from_arg($v)?;
+                            )+
 
-                                $(
-                                    let $p: <$A as FromParam>::Param<'_> =
-                                        <$A as FromParam>::from_arg(
-                                            $v,
-                                            &mut storage.$idx,
-                                        )?;
-                                )+
-
-                                let result: FR = (self)( $( $p ),+ );
-                                let value: R = result.into_result()?;
-                                Ok(value.into_value())
-                            })()
+                            let result: FR = (self)( $( $p ),+ );
+                            let value: R = result.into_result()?;
+                            Ok(value.into())
                         }
-                        _ => Err(Error::arity_error($arity, args.len())),
+                        _ => Err(Error::arity_error($arity, len)),
                     }
                 })
             }
@@ -759,7 +538,7 @@ impl<F, FR, R> IntoOperation<(), R> for F
 where
     F: Fn() -> FR + Send + Sync + 'static,
     FR: IntoResult<R> + 'static,
-    R: IntoValue + 'static,
+    R: Into<Value> + 'static,
 {
     fn into_operation(self) -> Arc<OperationFn> {
         Arc::new(move |args: Vec<Value>| {
@@ -769,16 +548,16 @@ where
 
             let result: FR = (self)();
             let value: R = result.into_result()?;
-            Ok(value.into_value())
+            Ok(value.into())
         })
     }
 }
 
-impl_into_operation_for_arity!(1, 0 => v0, p0: A1);
-impl_into_operation_for_arity!(2, 0 => v0, p0: A1, 1 => v1, p1: A2);
-impl_into_operation_for_arity!(3, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3);
-impl_into_operation_for_arity!(4, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4);
-impl_into_operation_for_arity!(5, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4, 4 => v4, p4: A5);
-impl_into_operation_for_arity!(6, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4, 4 => v4, p4: A5, 5 => v5, p5: A6);
-impl_into_operation_for_arity!(7, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4, 4 => v4, p4: A5, 5 => v5, p5: A6, 6 => v6, p6: A7);
-impl_into_operation_for_arity!(8, 0 => v0, p0: A1, 1 => v1, p1: A2, 2 => v2, p2: A3, 3 => v3, p3: A4, 4 => v4, p4: A5, 5 => v5, p5: A6, 6 => v6, p6: A7, 7 => v7, p7: A8);
+impl_into_operation_for_arity!(1, v0, p0: A1);
+impl_into_operation_for_arity!(2, v0, p0: A1, v1, p1: A2);
+impl_into_operation_for_arity!(3, v0, p0: A1, v1, p1: A2, v2, p2: A3);
+impl_into_operation_for_arity!(4, v0, p0: A1, v1, p1: A2, v2, p2: A3, v3, p3: A4);
+impl_into_operation_for_arity!(5, v0, p0: A1, v1, p1: A2, v2, p2: A3, v3, p3: A4, v4, p4: A5);
+impl_into_operation_for_arity!(6, v0, p0: A1, v1, p1: A2, v2, p2: A3, v3, p3: A4, v4, p4: A5, v5, p5: A6);
+impl_into_operation_for_arity!(7, v0, p0: A1, v1, p1: A2, v2, p2: A3, v3, p3: A4, v4, p4: A5, v5, p5: A6, v6, p6: A7);
+impl_into_operation_for_arity!(8, v0, p0: A1, v1, p1: A2, v2, p2: A3, v3, p3: A4, v4, p4: A5, v5, p5: A6, v6, p6: A7, v7, p7: A8);

@@ -1,12 +1,14 @@
-/// This module defines the core Abstract Syntax Tree (AST) types and helper functions
-/// for representing values in the interpreter. The main enum, [`Value`], covers
-/// all Scheme data types, including numbers, symbols, strings, booleans, lists, built-in
-/// and user-defined functions, and precompiled operations. Ergonomic helper functions
-/// such as [`val`], [`sym`], and [`nil`] are provided for convenient AST construction
-/// in both code and tests. The module also implements conversion traits for common Rust
-/// types, making it easy to build Values from Rust literals, arrays, slices, and
-/// vectors. Equality and display logic are customized to match Scheme semantics, including
-/// round-trip compatibility for precompiled operations.
+//! This module defines the core Abstract Syntax Tree (AST) types and helper functions
+//! for representing values in the interpreter. The main enum, [`Value`], covers
+//! all Scheme data types, including numbers, symbols, strings, booleans, lists, built-in
+//! and user-defined functions, and precompiled operations. Ergonomic helper functions
+//! such as [`val`], [`sym`], and [`nil`] are provided for convenient AST construction
+//! in both code and tests. The module also implements conversion traits for common Rust
+//! types, making it easy to build Values from Rust literals, arrays, slices, and
+//! vectors. Equality and display logic are customized to match Scheme semantics, including
+//! round-trip compatibility for precompiled operations.
+
+use crate::Error;
 use crate::builtinops::BuiltinOp;
 use crate::intooperation::OperationFn;
 
@@ -106,7 +108,7 @@ impl std::fmt::Debug for Value {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{:?}", v)?;
+                    write!(f, "{v:?}")?;
                 }
                 write!(f, ")")
             }
@@ -116,13 +118,13 @@ impl std::fmt::Debug for Value {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{:?}", a)?;
+                    write!(f, "{a:?}")?;
                 }
                 write!(f, "])")
             }
             Value::BuiltinFunction { id, .. } => write!(f, "BuiltinFunction({id})"),
             Value::Function { params, body, .. } => {
-                write!(f, "Function(params={params:?}, body={:?})", body)
+                write!(f, "Function(params={params:?}, body={body:?})")
             }
             Value::Unspecified => write!(f, "Unspecified"),
         }
@@ -182,6 +184,32 @@ impl<T: Into<Value>, const N: usize> From<[T; N]> for Value {
 impl<T: Into<Value> + Clone> From<&[T]> for Value {
     fn from(slice: &[T]) -> Self {
         Value::List(slice.iter().cloned().map(|x| x.into()).collect())
+    }
+}
+
+// Fallible conversions from `Value` back into primitive Rust types.
+
+impl std::convert::TryInto<NumberType> for Value {
+    type Error = Error;
+
+    fn try_into(self) -> Result<NumberType, Error> {
+        if let Value::Number(n) = self {
+            Ok(n)
+        } else {
+            Err(Error::TypeError("expected number".into()))
+        }
+    }
+}
+
+impl std::convert::TryInto<bool> for Value {
+    type Error = Error;
+
+    fn try_into(self) -> Result<bool, Error> {
+        if let Value::Bool(b) = self {
+            Ok(b)
+        } else {
+            Err(Error::TypeError("expected boolean".into()))
+        }
     }
 }
 

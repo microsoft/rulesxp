@@ -2,7 +2,7 @@ use crate::Error;
 use crate::MAX_EVAL_DEPTH;
 use crate::ast::Value;
 use crate::builtinops::{Arity, get_builtin_ops};
-use crate::intooperation::{IntoFixedOperation, IntoVariadicOperation, OperationFn};
+use crate::intooperation::{IntoOperation, IntoVariadicOperation, OperationFn};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -118,24 +118,35 @@ impl Environment {
     /// - `i64` (number)
     /// - `bool` (boolean)
     /// - `&str` (borrowed string slices)
-    /// - `&Value` (borrowed access to the raw AST value)
-    /// - list arguments via slices such as `&[i64]`, `&[bool]`,
-    ///   `&[&str]`, and `&[Value]` (when the call site passes a list)
+    /// - `Value` (owned access to the raw AST value)
+    /// - `ValueListIterator<'_>` (iterates over elements of a list argument as `&Value`)
+    /// - `NumIterator<'_>` (iterates over numeric elements of a list argument)
+    /// - `BoolIterator<'_>` (iterates over boolean elements of a list argument)
+    /// - `StringIterator<'_>` (iterates over string elements of a list argument)
+    ///
+    /// Additional scalar parameter types can be supported by adding
+    /// `impl TryInto<T, Error = Error> for Value` in `ast.rs`; those
+    /// automatically participate via the blanket `FromParam` impl.
+    ///
+    /// More advanced list-style and variadic behaviour (e.g. rest
+    /// parameters spanning multiple arguments) can be expressed using
+    /// the iterator-based APIs described on
+    /// [`Environment::register_variadic_builtin_operation`].
     ///
     /// Supported return types:
-    /// - any type implementing the internal `IntoValue` trait
-    ///   (currently `Value`, `i64`, `bool`, `String`, and `&str`)
-    /// - `Result<R, E>` where `R` is one of the above and `E: Display`
+    /// - any type `R` where `R: Into<Value>` (for example `Value`,
+    ///   `i64`, `bool`, `String`, and `&str`)
+    /// - `Result<R, E>` where `R: Into<Value>` and `E: Display`
     ///
     /// If you need true rest-parameter / variadic behavior (functions
-    /// that see all arguments as `&[Value]` or `&[i64]`), use
-    /// [`Environment::register_variadic_builtin_operation`] instead.
+    /// that see all arguments via iterators over the argument tail),
+    /// use [`Environment::register_variadic_builtin_operation`] instead.
     ///
     /// Arity is enforced automatically. Conversion errors yield `TypeError`,
     /// and any `E` from a `Result<R, E>` is converted to `Error::EvalError`.
     pub fn register_builtin_operation<F, Args, R>(&mut self, name: &str, func: F)
     where
-        F: IntoFixedOperation<Args, R> + 'static,
+        F: IntoOperation<Args, R> + 'static,
     {
         let wrapped = func.into_operation();
         self.bindings.insert(
@@ -150,9 +161,14 @@ impl Environment {
     /// Register a variadic builtin operation with explicit arity metadata.
     ///
     /// This is intended for functions whose Rust signature includes a
-    /// "rest" parameter, either as a raw slice of values,
-    /// `fn(&[Value]) -> Result<Value, Error>`, or as a typed slice such
-    /// as `fn(&[i64])` or `fn(i64, &[i64])`.
+    /// "rest" parameter, expressed using iterator types from the
+    /// [`crate::intooperation`] module.
+    ///
+    /// Examples:
+    /// - rest of all arguments as values: `fn(ValueListIterator<'_>) -> R`
+    /// - numeric tail: `fn(NumIterator<'_>) -> R`
+    /// - fixed prefix plus numeric tail: `fn(i64, NumIterator<'_>) -> R`
+    ///
     /// Fixed-arity functions should use
     /// [`Environment::register_builtin_operation`] instead.
     ///
@@ -542,7 +558,7 @@ mod tests {
     use super::*;
     use crate::Error;
     use crate::ast::{nil, sym, val};
-    use crate::intooperation::Rest;
+    use crate::intooperation::{NumIterator, NumRest, ValueListIterator, ValuesRest};
     use crate::scheme::parse_scheme;
 
     #[test]
@@ -564,7 +580,7 @@ mod tests {
         }
 
         let mut env = create_global_env();
-        env.register_builtin_operation("forty-two", forty_two);
+        env.register_builtin_operation::<_, (), i64>("forty-two", forty_two);
 
         let expr = parse_scheme("(forty-two)").unwrap();
         let result = eval(&expr, &mut env).unwrap();
@@ -582,9 +598,9 @@ mod tests {
         }
 
         let mut env = create_global_env();
-        // For functions returning Result<_, E>, Rust currently requires
-        // specifying the argument tuple `Args` and the output type `R`
-        // when using the typed API.
+        // Functions returning Result<_, E> are supported via IntoResult.
+        // Explicit type annotations on the registration help type inference
+        // in builds that enable all targets.
         env.register_builtin_operation::<_, (i64, i64), i64>("safe-div", safe_div);
 
         // Success case
@@ -600,41 +616,38 @@ mod tests {
     }
 
     #[test]
-    fn test_register_builtin_operation_vec_i64_list_param() {
-        fn sum_list(nums: &[i64]) -> i64 {
-            nums.iter().copied().sum()
+    fn test_register_builtin_operation_list_numeric_iterator_param() {
+        fn sum_list(nums: NumIterator<'_>) -> i64 {
+            nums.sum()
         }
 
         let mut env = create_global_env();
-        env.register_builtin_operation::<_, (&[i64],), i64>("sum-list", sum_list);
+        env.register_builtin_operation::<_, (NumIterator<'static>,), i64>("sum-list", sum_list);
 
-        let expr = parse_scheme("(sum-list '(1 2 3 4))").unwrap();
+        let expr = parse_scheme("(sum-list (list 1 2 3 4))").unwrap();
         let result = eval(&expr, &mut env).unwrap();
         assert_eq!(result, Value::Number(10));
     }
 
     #[test]
     fn test_register_builtin_operation_with_rest_values() {
-        fn first_and_rest_count(args: Rest<Value>) -> Result<Value, Error> {
-            let args_slice = args.as_slice();
-
-            if args_slice.is_empty() {
-                return Err(Error::arity_error(1, 0));
-            }
-
-            let first_number = match args_slice.first().expect("arity checked above") {
-                Value::Number(n) => *n,
-                _ => return Err(Error::TypeError("first argument must be a number".into())),
+        fn first_and_rest_count(mut args: ValueListIterator<'_>) -> Result<Value, Error> {
+            let first = match args.next() {
+                Some(Value::Number(n)) => *n,
+                Some(_) => return Err(Error::TypeError("first argument must be a number".into())),
+                None => return Err(Error::arity_error(1, 0)),
             };
 
+            let rest_count = args.count() as i64;
+
             Ok(Value::List(vec![
-                Value::Number(first_number),
-                Value::Number((args_slice.len() - 1) as i64),
+                Value::Number(first),
+                Value::Number(rest_count),
             ]))
         }
 
         let mut env = create_global_env();
-        env.register_variadic_builtin_operation::<_, (Rest<Value>,), Value>(
+        env.register_variadic_builtin_operation::<_, (ValuesRest,), Value>(
             "first-rest-count",
             Arity::AtLeast(1),
             first_and_rest_count,
@@ -650,19 +663,14 @@ mod tests {
 
     #[test]
     fn test_register_builtin_operation_varargs_borrowed_values_all() {
-        fn count_numbers(args: Rest<Value>) -> Result<Value, Error> {
-            let args_slice = args.as_slice();
-
-            let count = args_slice
-                .iter()
-                .filter(|v| matches!(v, Value::Number(_)))
-                .count() as i64;
+        fn count_numbers(args: ValueListIterator<'_>) -> Result<Value, Error> {
+            let count = args.filter(|v| matches!(v, Value::Number(_))).count() as i64;
 
             Ok(Value::Number(count))
         }
 
         let mut env = create_global_env();
-        env.register_variadic_builtin_operation::<_, (Rest<Value>,), Value>(
+        env.register_variadic_builtin_operation::<_, (ValuesRest,), Value>(
             "count-numbers",
             Arity::AtLeast(0),
             count_numbers,
@@ -675,12 +683,12 @@ mod tests {
 
     #[test]
     fn test_register_builtin_operation_varargs_all_i64() {
-        fn sum_all(nums: Rest<i64>) -> i64 {
-            nums.iter().copied().sum()
+        fn sum_all(nums: NumIterator<'_>) -> i64 {
+            nums.sum::<i64>()
         }
 
         let mut env = create_global_env();
-        env.register_variadic_builtin_operation::<_, (Rest<i64>,), i64>(
+        env.register_variadic_builtin_operation::<_, (NumRest,), i64>(
             "sum-varargs-all",
             Arity::AtLeast(0),
             sum_all,
@@ -693,12 +701,12 @@ mod tests {
 
     #[test]
     fn test_register_builtin_operation_varargs_fixed_plus_rest() {
-        fn weighted_sum(weight: i64, nums: Rest<i64>) -> i64 {
-            weight * nums.iter().copied().sum::<i64>()
+        fn weighted_sum(weight: i64, nums: NumIterator<'_>) -> i64 {
+            weight * nums.sum::<i64>()
         }
 
         let mut env = create_global_env();
-        env.register_variadic_builtin_operation::<_, (i64, Rest<i64>), i64>(
+        env.register_variadic_builtin_operation::<_, (i64, NumRest), i64>(
             "weighted-sum",
             Arity::AtLeast(1),
             weighted_sum,
@@ -711,12 +719,12 @@ mod tests {
 
     #[test]
     fn test_register_variadic_builtin_operation_with_explicit_arity() {
-        fn sum_all(nums: Rest<i64>) -> i64 {
-            nums.iter().copied().sum()
+        fn sum_all(nums: NumIterator<'_>) -> i64 {
+            nums.sum::<i64>()
         }
 
         let mut env = create_global_env();
-        env.register_variadic_builtin_operation::<_, (Rest<i64>,), i64>(
+        env.register_variadic_builtin_operation::<_, (NumRest,), i64>(
             "sum-all-min1",
             Arity::AtLeast(1),
             sum_all,
