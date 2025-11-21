@@ -3,11 +3,11 @@ use crate::Error;
 use crate::MAX_EVAL_DEPTH;
 use crate::ast::Value;
 use crate::builtinops::{Arity, get_builtin_ops};
+use std::sync::Arc;
 
 pub(crate) mod intooperation;
 pub use self::intooperation::{BoolIter, NumIter, StringIter, ValueIter};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Environment for variable bindings
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -238,7 +238,7 @@ fn eval_with_depth_tracking(
                     // Evaluate all arguments using helper function with depth tracking
                     let evaluated_args = eval_args(args, env, depth)?;
                     // Apply the function (arity already validated at parse time)
-                    f(&evaluated_args)
+                    f(evaluated_args)
                 }
                 OpKind::SpecialForm(special_form) => {
                     // Special forms are syntax structures handled here after being converted
@@ -510,12 +510,11 @@ pub fn create_global_env() -> Environment {
     for builtin_op in get_builtin_ops() {
         if let crate::builtinops::OpKind::Function(func) = &builtin_op.op_kind {
             // Use BuiltinFunction for environment bindings (dynamic calls through symbols)
-            let f = *func;
             env.define(
                 builtin_op.scheme_id.to_owned(),
                 Value::BuiltinFunction {
                     id: builtin_op.scheme_id.to_owned(),
-                    func: Arc::new(move |args: Vec<Value>| f(&args)),
+                    func: Arc::clone(func),
                 },
             );
         }
@@ -1006,7 +1005,7 @@ mod tests {
             // Test undefined variable errors
             ("undefined-var", Error),
             // Test type errors propagate through calls
-            ("(not 42)", SpecificError("boolean argument")), // Type error with specific message
+            ("(not 42)", SpecificError("expected boolean")), // Type error with specific message
             ("(car \"not-a-list\")", Error),                 // Type error
             // Test errors in nested expressions
             ("(+ 1 (car \"not-a-list\"))", Error),
@@ -1029,10 +1028,7 @@ mod tests {
             // throughout the chain. If set! were supported this design would need revisiting
             ("(set! x 42)", SpecificError("Unbound variable: set!")), // Unsupported special forms appear as unbound variables
             // Type errors
-            (
-                "(+ 1 \"hello\")",
-                SpecificError("Type error: + requires numbers"),
-            ),
+            ("(+ 1 \"hello\")", SpecificError("expected number")),
         ];
 
         run_comprehensive_tests(test_cases);
