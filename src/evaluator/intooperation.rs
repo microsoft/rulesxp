@@ -1,14 +1,22 @@
 use crate::Error;
 use crate::ast::Value;
-use std::fmt::Display;
 use std::iter::FusedIterator;
+use std::marker::PhantomData;
 use std::sync::Arc;
+
+// NOTE: This module is internal plumbing for the evaluator.
+// It defines the adapter layer that turns strongly-typed Rust
+// functions into the erased `OperationFn` used at runtime.
+//
+// External users should interact with `Environment` and the
+// registration APIs in `evaluator.rs`; this module is kept
+// crate-private but retains rich comments for maintainers.
 
 /// Canonical erased builtin function type used by the evaluator.
 ///
 /// Builtins receive ownership of their argument vector, enabling
 /// implementations that consume or rearrange arguments if desired.
-pub type OperationFn = dyn Fn(Vec<Value>) -> Result<Value, Error> + Send + Sync;
+pub(crate) type OperationFn = dyn Fn(Vec<Value>) -> Result<Value, Error> + Send + Sync;
 
 // =====================================================================
 // Internal machinery for fixed-arity argument conversion
@@ -85,253 +93,193 @@ impl FromParam for &str {
 // FromParam support for iterator parameters (list arguments)
 // =====================================================================
 
-impl<'b> FromParam for ValueListIterator<'b> {
-    type Param<'a> = ValueListIterator<'a>;
-
-    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error> {
-        if let Value::List(items) = value {
-            Ok(ValueListIterator::new(items.as_slice()))
-        } else {
-            Err(Error::TypeError("expected list".into()))
-        }
-    }
-}
-
-impl<'b> FromParam for NumIterator<'b> {
-    type Param<'a> = NumIterator<'a>;
-
-    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error> {
-        if let Value::List(items) = value {
-            NumIterator::new(items.as_slice())
-        } else {
-            Err(Error::TypeError("expected list".into()))
-        }
-    }
-}
-
-impl<'b> FromParam for BoolIterator<'b> {
-    type Param<'a> = BoolIterator<'a>;
-
-    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error> {
-        if let Value::List(items) = value {
-            BoolIterator::new(items.as_slice())
-        } else {
-            Err(Error::TypeError("expected list".into()))
-        }
-    }
-}
-
-impl<'b> FromParam for StringIterator<'b> {
-    type Param<'a> = StringIterator<'a>;
-
-    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error> {
-        if let Value::List(items) = value {
-            StringIterator::new(items.as_slice())
-        } else {
-            Err(Error::TypeError("expected list".into()))
-        }
-    }
-}
-
-/// Normalize both plain values and `Result`-returning functions into `Result<T, Error>`.
-pub trait IntoResult<T> {
-    fn into_result(self) -> Result<T, Error>;
-}
-
-impl<T> IntoResult<T> for T {
-    fn into_result(self) -> Result<T, Error> {
-        Ok(self)
-    }
-}
-
-impl<T, E> IntoResult<T> for Result<T, E>
+impl<'b, K> FromParam for TypedValueIter<'b, K>
 where
-    E: Display,
+    K: ValueElementKind,
 {
-    fn into_result(self) -> Result<T, Error> {
-        self.map_err(|e| Error::EvalError(e.to_string()))
+    type Param<'a> = TypedValueIter<'a, K>;
+
+    fn from_arg<'a>(value: &'a mut Value) -> Result<Self::Param<'a>, Error> {
+        if let Value::List(items) = value {
+            TypedValueIter::<K>::new(items.as_slice())
+        } else {
+            Err(Error::TypeError("expected list".into()))
+        }
     }
 }
 
 // =====================================================================
-// Iterator-based parameter types
+// Generic typed iterator built on top of the standard slice iterator
 // =====================================================================
 
-/// Borrowed iterator over a sequence of AST `Value` references.
-///
-/// This is the shared base type for all list/sequence-parameter
-/// iterators. Typed iterators such as [`NumIterator`], [`BoolIterator`]
-/// and [`StringIterator`] wrap this to provide element-level typing.
-#[derive(Debug, Clone, Copy)]
-pub struct ValueListIterator<'a> {
-    values: &'a [Value],
-    index: usize,
+/// Marker trait describing how to view a `Value` slice as a typed
+/// iterator. Implementations perform any necessary upfront validation
+/// and map each `Value` to the element type.
+#[doc(hidden)]
+pub trait ValueElementKind {
+    type Item<'a>;
+
+    fn precheck(slice: &[Value]) -> Result<(), Error>;
+    fn project<'a>(v: &'a Value) -> Self::Item<'a>;
 }
 
-impl<'a> ValueListIterator<'a> {
-    pub(crate) fn new(values: &'a [Value]) -> Self {
-        ValueListIterator { values, index: 0 }
+/// Generic iterator over a list of `Value`s, parameterized by a
+/// [`ValueElementKind`] that determines the element type and
+/// validation.
+#[doc(hidden)]
+pub struct TypedValueIter<'a, K: ValueElementKind> {
+    inner: std::slice::Iter<'a, Value>,
+    _marker: PhantomData<K>,
+}
+
+impl<'a, K> TypedValueIter<'a, K>
+where
+    K: ValueElementKind,
+{
+    pub(crate) fn new(values: &'a [Value]) -> Result<Self, Error> {
+        K::precheck(values)?;
+        Ok(TypedValueIter {
+            inner: values.iter(),
+            _marker: PhantomData,
+        })
     }
 }
 
-impl<'a> Iterator for ValueListIterator<'a> {
-    type Item = &'a Value;
+impl<'a, K> Iterator for TypedValueIter<'a, K>
+where
+    K: ValueElementKind,
+{
+    type Item = K::Item<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let v = self.values.get(self.index)?;
-        self.index += 1;
-        Some(v)
+        let v = self.inner.next()?;
+        Some(K::project(v))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.values.len().saturating_sub(self.index);
-        (remaining, Some(remaining))
+        self.inner.size_hint()
     }
 }
 
-impl<'a> ExactSizeIterator for ValueListIterator<'a> {}
-impl<'a> FusedIterator for ValueListIterator<'a> {}
+impl<'a, K> ExactSizeIterator for TypedValueIter<'a, K> where K: ValueElementKind {}
+impl<'a, K> FusedIterator for TypedValueIter<'a, K> where K: ValueElementKind {}
 
-/// Borrowed iterator over numeric arguments, performing type checking
-/// as elements are pulled. Internally this wraps a [`ValueListIterator`]
-/// and narrows each element to `i64`.
-#[derive(Debug, Clone, Copy)]
-pub struct NumIterator<'a> {
-    inner: ValueListIterator<'a>,
+// Concrete element kinds and their iterator aliases
+
+/// Element kind that views each `Value` as a borrowed reference,
+/// used for iterating over raw AST values.
+#[doc(hidden)]
+pub struct ValueKind;
+
+impl ValueElementKind for ValueKind {
+    type Item<'a> = &'a Value;
+
+    fn precheck(_slice: &[Value]) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn project<'a>(v: &'a Value) -> Self::Item<'a> {
+        v
+    }
 }
 
-impl<'a> NumIterator<'a> {
-    /// Build a numeric iterator over the provided values, performing a
-    /// single upfront type check that all elements are numbers.
-    pub(crate) fn new(values: &'a [Value]) -> Result<Self, Error> {
-        for v in values {
+#[doc(hidden)]
+pub struct NumberKind;
+
+impl ValueElementKind for NumberKind {
+    type Item<'a> = i64;
+
+    fn precheck(slice: &[Value]) -> Result<(), Error> {
+        for v in slice {
             if !matches!(v, Value::Number(_)) {
                 return Err(Error::TypeError("expected number".into()));
             }
         }
-
-        Ok(NumIterator {
-            inner: ValueListIterator::new(values),
-        })
+        Ok(())
     }
-}
 
-impl<'a> Iterator for NumIterator<'a> {
-    type Item = i64;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let v = self.inner.next()?;
-
+    fn project<'a>(v: &'a Value) -> Self::Item<'a> {
         if let Value::Number(n) = v {
-            Some(*n)
+            *n
         } else {
-            // `new` guarantees all elements are numbers.
-            debug_assert!(false, "NumIterator saw non-number after construction");
-            None
+            debug_assert!(false, "NumberKind::project saw non-number after precheck");
+            unreachable!("NumberKind invariant violated")
         }
     }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
 }
 
-impl<'a> ExactSizeIterator for NumIterator<'a> {}
-impl<'a> FusedIterator for NumIterator<'a> {}
+#[doc(hidden)]
+pub struct BoolKind;
 
-/// Borrowed iterator over boolean arguments, performing type checking
-/// as elements are pulled. Internally this wraps a
-/// [`ValueListIterator`] and narrows each element to `bool`.
-#[derive(Debug, Clone, Copy)]
-pub struct BoolIterator<'a> {
-    inner: ValueListIterator<'a>,
-}
+impl ValueElementKind for BoolKind {
+    type Item<'a> = bool;
 
-impl<'a> BoolIterator<'a> {
-    /// Build a boolean iterator over the provided values, performing a
-    /// single upfront type check that all elements are booleans.
-    pub(crate) fn new(values: &'a [Value]) -> Result<Self, Error> {
-        for v in values {
+    fn precheck(slice: &[Value]) -> Result<(), Error> {
+        for v in slice {
             if !matches!(v, Value::Bool(_)) {
                 return Err(Error::TypeError("expected boolean".into()));
             }
         }
-
-        Ok(BoolIterator {
-            inner: ValueListIterator::new(values),
-        })
+        Ok(())
     }
-}
 
-impl<'a> Iterator for BoolIterator<'a> {
-    type Item = bool;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let v = self.inner.next()?;
-
+    fn project<'a>(v: &'a Value) -> Self::Item<'a> {
         if let Value::Bool(b) = v {
-            Some(*b)
+            *b
         } else {
-            // `new` guarantees all elements are booleans.
-            debug_assert!(false, "BoolIterator saw non-boolean after construction");
-            None
+            debug_assert!(false, "BoolKind::project saw non-boolean after precheck");
+            unreachable!("BoolKind invariant violated")
         }
     }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
 }
 
-impl<'a> ExactSizeIterator for BoolIterator<'a> {}
-impl<'a> FusedIterator for BoolIterator<'a> {}
+#[doc(hidden)]
+pub struct StringKind;
 
-/// Borrowed iterator over string arguments, performing type checking
-/// as elements are pulled. Internally this wraps a
-/// [`ValueListIterator`] and narrows each element to `&str`.
-#[derive(Debug, Clone, Copy)]
-pub struct StringIterator<'a> {
-    inner: ValueListIterator<'a>,
-}
+impl ValueElementKind for StringKind {
+    type Item<'a> = &'a str;
 
-impl<'a> StringIterator<'a> {
-    /// Build a string iterator over the provided values, performing a
-    /// single upfront type check that all elements are strings.
-    pub(crate) fn new(values: &'a [Value]) -> Result<Self, Error> {
-        for v in values {
+    fn precheck(slice: &[Value]) -> Result<(), Error> {
+        for v in slice {
             if !matches!(v, Value::String(_)) {
                 return Err(Error::TypeError("expected string".into()));
             }
         }
-
-        Ok(StringIterator {
-            inner: ValueListIterator::new(values),
-        })
+        Ok(())
     }
-}
 
-impl<'a> Iterator for StringIterator<'a> {
-    type Item = &'a str;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let v = self.inner.next()?;
-
+    fn project<'a>(v: &'a Value) -> Self::Item<'a> {
         if let Value::String(s) = v {
-            Some(s.as_str())
+            s.as_str()
         } else {
-            // `new` guarantees all elements are strings.
-            debug_assert!(false, "StringIterator saw non-string after construction");
-            None
+            debug_assert!(false, "StringKind::project saw non-string after precheck");
+            unreachable!("StringKind invariant violated")
         }
     }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
 }
 
-impl<'a> ExactSizeIterator for StringIterator<'a> {}
-impl<'a> FusedIterator for StringIterator<'a> {}
+/// Borrowed iterator over a sequence of AST `Value` references.
+///
+/// This is the shared base type for all list/sequence-parameter
+/// iterators. Typed iterators such as [`NumIter`], [`BoolIter`]
+/// and [`StringIter`] are specializations that provide
+/// element-level typing.
+pub type ValueIter<'a> = TypedValueIter<'a, ValueKind>;
+
+/// Borrowed iterator over numeric arguments, performing type checking
+/// as elements are pulled. Internally this is a specialization of
+/// [`TypedValueIter`] that narrows each element to `i64`.
+pub type NumIter<'a> = TypedValueIter<'a, NumberKind>;
+
+/// Borrowed iterator over boolean arguments, performing type checking
+/// as elements are pulled. Internally this is a specialization of
+/// [`TypedValueIter`] that narrows each element to `bool`.
+pub type BoolIter<'a> = TypedValueIter<'a, BoolKind>;
+
+/// Borrowed iterator over string arguments, performing type checking
+/// as elements are pulled. Internally this is a specialization of
+/// [`TypedValueIter`] that narrows each element to `&str`.
+pub type StringIter<'a> = TypedValueIter<'a, StringKind>;
 
 // =====================================================================
 // Rest-parameter support for variadic operations
@@ -348,56 +296,56 @@ pub(crate) trait FromRest {
     fn from_rest<'a>(slice: &'a [Value]) -> Result<Self::Param<'a>, Error>;
 }
 
-impl FromRest for ValueListIterator<'static> {
-    type Param<'a> = ValueListIterator<'a>;
+impl<K> FromRest for TypedValueIter<'static, K>
+where
+    K: ValueElementKind,
+{
+    type Param<'a> = TypedValueIter<'a, K>;
 
     fn from_rest<'a>(slice: &'a [Value]) -> Result<Self::Param<'a>, Error> {
-        Ok(ValueListIterator::new(slice))
+        TypedValueIter::<K>::new(slice)
     }
 }
 
-impl FromRest for NumIterator<'static> {
-    type Param<'a> = NumIterator<'a>;
+// =====================================================================
+// Return-type adaptation for builtin functions
+// =====================================================================
 
-    fn from_rest<'a>(slice: &'a [Value]) -> Result<Self::Param<'a>, Error> {
-        NumIterator::new(slice)
+/// Internal trait that normalizes builtin return types to the
+/// canonical `Result<Value, Error>` expected by the evaluator.
+///
+/// Builtins typically return either `Result<Value, Error>` directly
+/// or `Result<T, Error>` for some `T` that implements `Into<Value>`.
+pub(crate) trait IntoValueResult {
+    fn into_value_result(self) -> Result<Value, Error>;
+}
+
+impl<T> IntoValueResult for Result<T, Error>
+where
+    T: Into<Value>,
+{
+    fn into_value_result(self) -> Result<Value, Error> {
+        self.map(Into::into)
     }
 }
 
-impl FromRest for BoolIterator<'static> {
-    type Param<'a> = BoolIterator<'a>;
-
-    fn from_rest<'a>(slice: &'a [Value]) -> Result<Self::Param<'a>, Error> {
-        BoolIterator::new(slice)
+impl<T> IntoValueResult for T
+where
+    T: Into<Value>,
+{
+    fn into_value_result(self) -> Result<Value, Error> {
+        Ok(self.into())
     }
 }
 
-impl FromRest for StringIterator<'static> {
-    type Param<'a> = StringIterator<'a>;
-
-    fn from_rest<'a>(slice: &'a [Value]) -> Result<Self::Param<'a>, Error> {
-        StringIterator::new(slice)
-    }
-}
-
-/// Marker type used in `Args` tuples to indicate that a parameter
-/// position is populated from the variadic "rest" arguments using
-/// [`FromRest`].
-#[derive(Debug, Clone, Copy)]
-pub struct Rest<I>(std::marker::PhantomData<I>);
-
-// Convenience aliases for common rest-parameter iterator types used in
-// tests and documentation. These are only used at the type level; the
-// actual parameters seen by builtin functions are the lifetime-
-// parameterised iterator types above.
-pub type ValuesRest = Rest<ValueListIterator<'static>>;
-pub type NumRest = Rest<NumIterator<'static>>;
-pub type BoolRest = Rest<BoolIterator<'static>>;
-pub type StringRest = Rest<StringIterator<'static>>;
-
-/// Convert a strongly-typed Rust function or closure into the erased
-/// [`OperationFn`], parameterized by an argument tuple type.
-pub trait IntoOperation<Args, R> {
+/// Public trait for converting strongly-typed Rust functions or
+/// closures into the erased [`OperationFn`], parameterized by an
+/// argument tuple type.
+///
+/// Builtins implemented via this trait may return any type `R` that
+/// implements [`IntoValueResult`], typically `Result<Value, Error>`
+/// or `Result<T, Error>` where `T: Into<Value>`.
+pub(crate) trait IntoOperation<Args> {
     fn into_operation(self) -> Arc<OperationFn>;
 }
 
@@ -405,10 +353,10 @@ pub trait IntoOperation<Args, R> {
 ///
 /// Implemented for functions whose Rust signature includes a variadic
 /// "rest" parameter, expressed using the iterator types defined in
-/// this module (`ValueListIterator<'a>`, `NumIterator<'a>`,
-/// `BoolIterator<'a>`, or `StringIterator<'a>`), optionally after a
+/// this module (`ValueIter<'a>`, `NumIter<'a>`,
+/// `BoolIter<'a>`, or `StringIter<'a>`), optionally after a
 /// fixed prefix of `FromParam` parameters.
-pub trait IntoVariadicOperation<Args, R> {
+pub(crate) trait IntoVariadicOperation<Args> {
     fn into_variadic_operation(self) -> Arc<OperationFn>;
 }
 
@@ -418,42 +366,40 @@ pub trait IntoVariadicOperation<Args, R> {
 
 /// Adapter for functions whose Rust signature consists only of a rest
 /// parameter expressed via one of the iterator types in this module
-/// (e.g. `ValueListIterator<'a>`, `NumIterator<'a>`, etc.).
-impl<F, FR, R, I> IntoVariadicOperation<(Rest<I>,), R> for F
+/// (e.g. `ValueIter<'a>`, `NumIter<'a>`, etc.).
+impl<F, I, R> IntoVariadicOperation<(I,)> for F
 where
     I: FromRest,
-    F: for<'a> Fn(<I as FromRest>::Param<'a>) -> FR + Send + Sync + 'static,
-    FR: IntoResult<R> + 'static,
-    R: Into<Value> + 'static,
+    F: for<'a> Fn(<I as FromRest>::Param<'a>) -> R + Send + Sync + 'static,
+    R: IntoValueResult,
 {
     fn into_variadic_operation(self) -> Arc<OperationFn> {
         Arc::new(move |args: Vec<Value>| {
             let rest_param: <I as FromRest>::Param<'_> = <I as FromRest>::from_rest(&args[..])?;
-            let result: FR = (self)(rest_param);
-            let value: R = result.into_result()?;
-            Ok(value.into())
+            let result: R = (self)(rest_param);
+            result.into_value_result()
         })
     }
 }
 
-/// Helper macro to implement `IntoVariadicOperation` for functions with
-/// a fixed prefix of `FromParam` parameters followed by a single rest
-/// parameter expressed using one of the iterator types in this module.
+/// Helper macro to implement `IntoVariadicOperation` for functions
+/// with a fixed prefix of `FromParam` parameters followed by a single
+/// rest parameter expressed using one of the iterator types in this
+/// module.
 macro_rules! impl_into_variadic_operation_for_prefix_and_rest {
     ($prefix:expr, $( $v:ident, $p:ident : $A:ident ),+ ) => {
-        impl<F, FR, R, I, $( $A ),+> IntoVariadicOperation<( $( $A, )+ Rest<I>, ), R> for F
+        impl<F, I, R, $( $A ),+> IntoVariadicOperation<( $( $A, )+ I, )> for F
         where
             I: FromRest,
             $( $A: FromParam, )+
             F: for<'a> Fn(
                     $( <$A as FromParam>::Param<'a> ),+,
                     <I as FromRest>::Param<'a>,
-                ) -> FR
+                ) -> R
                 + Send
                 + Sync
                 + 'static,
-            FR: IntoResult<R> + 'static,
-            R: Into<Value> + 'static,
+            R: IntoValueResult,
         {
             fn into_variadic_operation(self) -> Arc<OperationFn> {
                 Arc::new(move |mut args: Vec<Value>| {
@@ -468,9 +414,8 @@ macro_rules! impl_into_variadic_operation_for_prefix_and_rest {
                             let rest_param: <I as FromRest>::Param<'_> =
                                 <I as FromRest>::from_rest(&*rest)?;
 
-                            let result: FR = (self)( $( $p ),+, rest_param );
-                            let value: R = result.into_result()?;
-                            Ok(value.into())
+                            let result: R = (self)( $( $p ),+, rest_param );
+                            result.into_value_result()
                         }
                         _ => Err(Error::arity_error($prefix, len)),
                     }
@@ -501,15 +446,14 @@ impl_into_variadic_operation_for_prefix_and_rest!(7, v0, p0: A1, v1, p1: A2, v2,
 /// builtin function.
 macro_rules! impl_into_operation_for_arity {
     ($arity:expr, $( $v:ident, $p:ident : $A:ident ),+ ) => {
-        impl<F, FR, R, $( $A ),+> IntoOperation<( $( $A, )+ ), R> for F
+        impl<F, R, $( $A ),+> IntoOperation<( $( $A, )+ )> for F
         where
-            F: for<'a> Fn( $( <$A as FromParam>::Param<'a> ),+ ) -> FR
+            F: for<'a> Fn( $( <$A as FromParam>::Param<'a> ),+ ) -> R
                 + Send
                 + Sync
                 + 'static,
-            FR: IntoResult<R> + 'static,
-            R: Into<Value> + 'static,
             $( $A: FromParam, )+
+            R: IntoValueResult,
         {
             fn into_operation(self) -> Arc<OperationFn> {
                 Arc::new(move |mut args: Vec<Value>| {
@@ -521,9 +465,8 @@ macro_rules! impl_into_operation_for_arity {
                                     <$A as FromParam>::from_arg($v)?;
                             )+
 
-                            let result: FR = (self)( $( $p ),+ );
-                            let value: R = result.into_result()?;
-                            Ok(value.into())
+                            let result: R = (self)( $( $p ),+ );
+                            result.into_value_result()
                         }
                         _ => Err(Error::arity_error($arity, len)),
                     }
@@ -534,11 +477,10 @@ macro_rules! impl_into_operation_for_arity {
 }
 
 // 0-arg functions / closures
-impl<F, FR, R> IntoOperation<(), R> for F
+impl<F, R> IntoOperation<()> for F
 where
-    F: Fn() -> FR + Send + Sync + 'static,
-    FR: IntoResult<R> + 'static,
-    R: Into<Value> + 'static,
+    F: Fn() -> R + Send + Sync + 'static,
+    R: IntoValueResult,
 {
     fn into_operation(self) -> Arc<OperationFn> {
         Arc::new(move |args: Vec<Value>| {
@@ -546,9 +488,8 @@ where
                 return Err(Error::arity_error(0, args.len()));
             }
 
-            let result: FR = (self)();
-            let value: R = result.into_result()?;
-            Ok(value.into())
+            let result: R = (self)();
+            result.into_value_result()
         })
     }
 }

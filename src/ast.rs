@@ -10,7 +10,7 @@
 
 use crate::Error;
 use crate::builtinops::BuiltinOp;
-use crate::intooperation::OperationFn;
+use crate::evaluator::intooperation::OperationFn;
 
 /// Type alias for number values in interpreter
 pub(crate) type NumberType = i64;

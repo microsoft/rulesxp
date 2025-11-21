@@ -113,7 +113,6 @@ impl fmt::Display for Error {
 pub mod ast;
 pub mod builtinops;
 pub mod evaluator;
-pub mod intooperation;
 
 #[cfg(feature = "jsonlogic")]
 pub mod jsonlogic;
