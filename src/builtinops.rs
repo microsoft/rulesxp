@@ -169,19 +169,21 @@ impl BuiltinOp {
 // Macro to generate numeric comparison functions
 macro_rules! numeric_comparison {
     ($name:ident, $op:tt, $op_str:expr) => {
-        fn $name(mut args: NumIter<'_>) -> Result<bool, Error> {
-            // SCHEME-JSONLOGIC-STRICT: Require at least 2 arguments (both standards allow < 2 args but with different semantics)
-            let len = args.len();
-            if len < 2 {
-                return Err(Error::arity_error(2, len));
+        fn $name(first: NumberType, rest: NumIter<'_>) -> Result<bool, Error> {
+            let mut iter = rest.peekable();
+
+            // SCHEME-JSONLOGIC-STRICT: Require at least 2 arguments (both
+            // standards allow < 2 args but with different semantics).
+            // If there is no second operand, we have only one argument.
+            if iter.peek().is_none() {
+                return Err(Error::arity_error(2, 1));
             }
 
-            // Chain comparisons: all adjacent pairs must satisfy the comparison
-            let mut prev = args
-                .next()
-                .expect("ExactSizeIterator len() contract violated for numeric comparison");
-
-            for current in args {
+            // Chain comparisons: all adjacent pairs must satisfy the comparison.
+            // Start with the first argument, then compare each subsequent
+            // element against the previous one.
+            let mut prev = first;
+            for current in iter {
                 if !(prev $op current) {
                     return Ok(false);
                 }
@@ -394,31 +396,41 @@ static BUILTIN_OPS: LazyLock<Vec<BuiltinOp>> = LazyLock::new(|| {
         BuiltinOp {
             scheme_id: ">",
             jsonlogic_id: ">",
-            op_kind: OpKind::Function(builtin_variadic::<(NumIter<'static>,), _>(builtin_gt)),
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_gt,
+            )),
             arity: Arity::AtLeast(2),
         },
         BuiltinOp {
             scheme_id: ">=",
             jsonlogic_id: ">=",
-            op_kind: OpKind::Function(builtin_variadic::<(NumIter<'static>,), _>(builtin_ge)),
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_ge,
+            )),
             arity: Arity::AtLeast(2),
         },
         BuiltinOp {
             scheme_id: "<",
             jsonlogic_id: "<",
-            op_kind: OpKind::Function(builtin_variadic::<(NumIter<'static>,), _>(builtin_lt)),
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_lt,
+            )),
             arity: Arity::AtLeast(2),
         },
         BuiltinOp {
             scheme_id: "<=",
             jsonlogic_id: "<=",
-            op_kind: OpKind::Function(builtin_variadic::<(NumIter<'static>,), _>(builtin_le)),
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_le,
+            )),
             arity: Arity::AtLeast(2),
         },
         BuiltinOp {
             scheme_id: "=",
             jsonlogic_id: "scheme-numeric-equals",
-            op_kind: OpKind::Function(builtin_variadic::<(NumIter<'static>,), _>(builtin_eq)),
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_eq,
+            )),
             arity: Arity::AtLeast(2),
         },
         BuiltinOp {
