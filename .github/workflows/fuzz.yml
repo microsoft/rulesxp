@@ -18,6 +18,8 @@ jobs:
   fuzz:
     name: Fuzz Testing
     runs-on: ubuntu-latest
+    # Only run fuzzing for non-fork repositories to save folks CI credits.
+    if: github.event.repository.fork == false
     strategy:
       fail-fast: false
       matrix:

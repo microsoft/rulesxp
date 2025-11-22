@@ -15,6 +15,9 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
+    # Only run in non-fork repositories (e.g., the canonical repo),
+    # so tags in forks don't create upstream-style releases.
+    if: github.event.repository.fork == false
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
 
@@ -50,6 +53,8 @@ jobs:
   publish-crate:
     name: Publish to crates.io
     runs-on: ubuntu-latest
+    # crates.io publishing is only meaningful for non-fork roots
+    if: github.event.repository.fork == false
     needs: create-release
 
     steps:
@@ -68,6 +73,8 @@ jobs:
   build-binaries:
     name: Build Release Binaries
     runs-on: ${{ matrix.os }}
+    # Only build and upload release binaries for non-fork repositories
+    if: github.event.repository.fork == false
     needs: create-release
     strategy:
       matrix:
