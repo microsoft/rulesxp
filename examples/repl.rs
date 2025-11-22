@@ -1,5 +1,5 @@
 use rulesxp::Error;
-use rulesxp::ast::Value;
+use rulesxp::Value;
 use rulesxp::evaluator;
 use rulesxp::jsonlogic::{ast_to_jsonlogic, parse_jsonlogic};
 use rulesxp::scheme::parse_scheme;
@@ -197,7 +197,7 @@ fn print_environment(env: &rulesxp::evaluator::Environment) {
 
     for (name, value) in bindings {
         match value {
-            rulesxp::ast::Value::BuiltinFunction { .. } => builtins.push(name),
+            Value::BuiltinFunction { .. } => builtins.push(name),
             _ => user_defined.push((name, value)),
         }
     }

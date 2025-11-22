@@ -53,50 +53,11 @@ use crate::Error;
 use crate::ast::{NumberType, Value};
 use crate::evaluator::intooperation::{IntoOperation, IntoVariadicOperation, OperationFn};
 use crate::evaluator::{
-    Environment, NumIter, StringIter, ValueIter, eval_and, eval_define, eval_if, eval_lambda,
-    eval_or, eval_quote,
+    Arity, Environment, NumIter, StringIter, ValueIter, eval_and, eval_define, eval_if,
+    eval_lambda, eval_or, eval_quote,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
-
-/// Represents the expected number of arguments for an operation
-#[derive(Debug, Clone, PartialEq)]
-pub enum Arity {
-    /// Exactly n arguments required
-    Exact(usize),
-    /// At least n arguments required
-    AtLeast(usize),
-    /// Between min and max arguments (inclusive)
-    Range(usize, usize),
-    /// Any number of arguments (0 or more)
-    Any,
-}
-
-impl Arity {
-    /// Check if the given number of arguments is valid for this arity constraint
-    pub(crate) fn validate(&self, arg_count: usize) -> Result<(), Error> {
-        let valid = match self {
-            Arity::Exact(n) => arg_count == *n,
-            Arity::AtLeast(n) => arg_count >= *n,
-            Arity::Range(min, max) => arg_count >= *min && arg_count <= *max,
-            Arity::Any => true,
-        };
-
-        if valid {
-            Ok(())
-        } else {
-            Err(Error::ArityError {
-                expected: match self {
-                    Arity::Exact(n) | Arity::AtLeast(n) => *n,
-                    Arity::Range(min, _) => *min,
-                    Arity::Any => 0,
-                },
-                got: arg_count,
-                expression: None, // Builtin validation doesn't have expression context
-            })
-        }
-    }
-}
 
 /// Represents the implementation of a built-in expression (function or special form)
 #[derive(Clone)]

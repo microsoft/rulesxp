@@ -290,7 +290,7 @@ fn parse_quote(
     ))
 }
 
-/// Parse a complete S-expression from input with optimization enabled
+/// Parse a complete S-expression from input.
 pub fn parse_scheme(input: &str) -> Result<Value, Error> {
     match terminated(
         |input| parse_sexpr(input, ShouldPrecompileOps::Yes, 0),

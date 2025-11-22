@@ -2,12 +2,51 @@ use self::intooperation::{IntoOperation, IntoVariadicOperation};
 use crate::Error;
 use crate::MAX_EVAL_DEPTH;
 use crate::ast::Value;
-use crate::builtinops::{Arity, get_builtin_ops};
+use crate::builtinops::get_builtin_ops;
 use std::sync::Arc;
 
 pub(crate) mod intooperation;
 pub use self::intooperation::{BoolIter, NumIter, StringIter, ValueIter};
 use std::collections::HashMap;
+
+/// Represents the expected number of arguments for an operation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Arity {
+    /// Exactly n arguments required
+    Exact(usize),
+    /// At least n arguments required
+    AtLeast(usize),
+    /// Between min and max arguments (inclusive)
+    Range(usize, usize),
+    /// Any number of arguments (0 or more)
+    Any,
+}
+
+impl Arity {
+    /// Check if the given number of arguments is valid for this arity constraint.
+    pub(crate) fn validate(&self, arg_count: usize) -> Result<(), Error> {
+        let valid = match self {
+            Arity::Exact(n) => arg_count == *n,
+            Arity::AtLeast(n) => arg_count >= *n,
+            Arity::Range(min, max) => arg_count >= *min && arg_count <= *max,
+            Arity::Any => true,
+        };
+
+        if valid {
+            Ok(())
+        } else {
+            Err(Error::ArityError {
+                expected: match self {
+                    Arity::Exact(n) | Arity::AtLeast(n) => *n,
+                    Arity::Range(min, _) => *min,
+                    Arity::Any => 0,
+                },
+                got: arg_count,
+                expression: None, // Builtin validation doesn't have expression context
+            })
+        }
+    }
+}
 
 /// Environment for variable bindings
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -46,7 +85,7 @@ impl Environment {
     ///
     /// This allows writing natural Rust functions like:
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use rulesxp::{Error, evaluator};
     ///
     /// // Infallible builtin: returns a bare i64
@@ -62,7 +101,7 @@ impl Environment {
     /// a Value or a type convertible into Value, and encode
     /// their own error messages:
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use rulesxp::{Error, evaluator};
     ///
     /// fn safe_div(a: i64, b: i64) -> Result<i64, Error> {

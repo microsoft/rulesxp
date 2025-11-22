@@ -40,7 +40,6 @@
 //!
 //! - `scheme`: S-expression parsing from text
 //! - `evaluator`: Core expression evaluation engine
-//! - `builtinops`: Built-in operations with dual-language mapping
 //! - `jsonlogic`: JSONLogic format conversion and integration
 
 use std::fmt;
@@ -110,9 +109,13 @@ impl fmt::Display for Error {
     }
 }
 
-pub mod ast;
-pub mod builtinops;
+mod ast;
+mod builtinops;
 pub mod evaluator;
+
+// Re-export the core Value type at the crate root so that
+// callers do not need to depend on the internal `ast` module.
+pub use ast::Value;
 
 #[cfg(feature = "jsonlogic")]
 pub mod jsonlogic;
