@@ -178,12 +178,13 @@ env.register_builtin_operation::<(i64, i64)>("add2", add2);
 env.register_builtin_operation::<(i64, i64)>("safe-div", safe_div);
 
 // Now you can call (add2 7 5) or (safe-div 6 3) from Scheme
+// Or you can call {"add2" : [7, 5]} or {"safe-div" : [6, 3]} from JSONLogic
 ```
 
 #### List and variadic builtins
 
 For list-style and variadic behavior, use the iterator-based
-parameter types re-exported from `rulesxp::evaluator`.
+parameter types from `rulesxp::evaluator`.
 
 ```rust
 use rulesxp::{Error, ast::Value, evaluator};

@@ -259,26 +259,18 @@ impl ValueElementKind for StringKind {
 }
 
 /// Borrowed iterator over a sequence of AST `Value` references.
-///
-/// This is the shared base type for all list/sequence-parameter
-/// iterators. Typed iterators such as [`NumIter`], [`BoolIter`]
-/// and [`StringIter`] are specializations that provide
-/// element-level typing.
 pub type ValueIter<'a> = TypedValueIter<'a, ValueKind>;
 
 /// Borrowed iterator over numeric arguments, performing type checking
-/// as elements are pulled. Internally this is a specialization of
-/// [`TypedValueIter`] that narrows each element to `i64`.
+/// as elements are pulled.
 pub type NumIter<'a> = TypedValueIter<'a, NumberKind>;
 
 /// Borrowed iterator over boolean arguments, performing type checking
-/// as elements are pulled. Internally this is a specialization of
-/// [`TypedValueIter`] that narrows each element to `bool`.
+/// as elements are pulled.
 pub type BoolIter<'a> = TypedValueIter<'a, BoolKind>;
 
 /// Borrowed iterator over string arguments, performing type checking
-/// as elements are pulled. Internally this is a specialization of
-/// [`TypedValueIter`] that narrows each element to `&str`.
+/// as elements are pulled.
 pub type StringIter<'a> = TypedValueIter<'a, StringKind>;
 
 // =====================================================================
