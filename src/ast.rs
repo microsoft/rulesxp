@@ -1,14 +1,18 @@
-/// This module defines the core Abstract Syntax Tree (AST) types and helper functions
-/// for representing values in the interpreter. The main enum, [`Value`], covers
-/// all Scheme data types, including numbers, symbols, strings, booleans, lists, built-in
-/// and user-defined functions, and precompiled operations. Ergonomic helper functions
-/// such as [`val`], [`sym`], and [`nil`] are provided for convenient AST construction
-/// in both code and tests. The module also implements conversion traits for common Rust
-/// types, making it easy to build Values from Rust literals, arrays, slices, and
-/// vectors. Equality and display logic are customized to match Scheme semantics, including
-/// round-trip compatibility for precompiled operations.
+/*
+ This module defines the core Abstract Syntax Tree (AST) types and helper functions
+ for representing values in the interpreter. The main enum, [`Value`], covers
+ all Scheme data types, including numbers, symbols, strings, booleans, lists, built-in
+ and user-defined functions, and precompiled operations. Ergonomic helper functions
+ such as [`val`], [`sym`], and [`nil`] are provided for convenient AST construction
+ in both code and tests. The module also implements conversion traits for common Rust
+ types, making it easy to build Values from Rust literals, arrays, slices, and
+ vectors. Equality and display logic are customized to match Scheme semantics, including
+ round-trip compatibility for precompiled operations.
+*/
+
 use crate::Error;
 use crate::builtinops::BuiltinOp;
+use crate::evaluator::intooperation::OperationFn;
 
 /// Type alias for number values in interpreter
 pub(crate) type NumberType = i64;
@@ -55,7 +59,7 @@ pub(crate) fn is_valid_symbol(name: &str) -> bool {
 /// - `val(42)` for values, `sym("name")` for symbols, `nil()` for empty lists
 /// - `val([1, 2, 3])` for homogeneous lists
 /// - `val(vec![sym("op"), val(42)])` for mixed lists
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Value {
     /// Numbers (integers only)
     Number(NumberType),
@@ -77,7 +81,10 @@ pub enum Value {
     /// Uses id string for equality comparison instead of function pointer
     BuiltinFunction {
         id: String,
-        func: fn(&[Value]) -> Result<Value, Error>,
+        // Stored as an Arc to allow dynamic wrapping of typed Rust functions/closures.
+        // Trait object enables registering strongly typed functions (e.g. fn(i64, i64)->i64)
+        // that are automatically converted to the canonical evaluator signature.
+        func: std::sync::Arc<OperationFn>,
     },
     /// User-defined functions (params, body, closure env)
     Function {
@@ -88,6 +95,42 @@ pub enum Value {
     /// Unspecified values (e.g., return value of define)
     /// These values never equal themselves or any other value
     Unspecified,
+}
+
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Number(n) => write!(f, "Number({n})"),
+            Value::Symbol(s) => write!(f, "Symbol({s})"),
+            Value::String(s) => write!(f, "String(\"{s}\")"),
+            Value::Bool(b) => write!(f, "Bool({b})"),
+            Value::List(list) => {
+                write!(f, "List(")?;
+                for (i, v) in list.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{v:?}")?;
+                }
+                write!(f, ")")
+            }
+            Value::PrecompiledOp { op_id, args, .. } => {
+                write!(f, "PrecompiledOp({op_id}, args=[")?;
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{a:?}")?;
+                }
+                write!(f, "])")
+            }
+            Value::BuiltinFunction { id, .. } => write!(f, "BuiltinFunction({id})"),
+            Value::Function { params, body, .. } => {
+                write!(f, "Function(params={params:?}, body={body:?})")
+            }
+            Value::Unspecified => write!(f, "Unspecified"),
+        }
+    }
 }
 
 // From trait implementations for Value - enables .into() conversion
@@ -143,6 +186,32 @@ impl<T: Into<Value>, const N: usize> From<[T; N]> for Value {
 impl<T: Into<Value> + Clone> From<&[T]> for Value {
     fn from(slice: &[T]) -> Self {
         Value::List(slice.iter().cloned().map(|x| x.into()).collect())
+    }
+}
+
+// Fallible conversions from `Value` back into primitive Rust types.
+
+impl std::convert::TryInto<NumberType> for Value {
+    type Error = Error;
+
+    fn try_into(self) -> Result<NumberType, Error> {
+        if let Value::Number(n) = self {
+            Ok(n)
+        } else {
+            Err(Error::TypeError("expected number".into()))
+        }
+    }
+}
+
+impl std::convert::TryInto<bool> for Value {
+    type Error = Error;
+
+    fn try_into(self) -> Result<bool, Error> {
+        if let Value::Bool(b) = self {
+            Ok(b)
+        } else {
+            Err(Error::TypeError("expected boolean".into()))
+        }
     }
 }
 

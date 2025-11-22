@@ -51,11 +51,13 @@
 
 use crate::Error;
 use crate::ast::{NumberType, Value};
+use crate::evaluator::intooperation::{IntoOperation, IntoVariadicOperation, OperationFn};
 use crate::evaluator::{
-    Environment, eval_and, eval_define, eval_if, eval_lambda, eval_or, eval_quote,
+    Environment, NumIter, StringIter, ValueIter, eval_and, eval_define, eval_if, eval_lambda,
+    eval_or, eval_quote,
 };
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 /// Represents the expected number of arguments for an operation
 #[derive(Debug, Clone, PartialEq)]
@@ -99,8 +101,9 @@ impl Arity {
 /// Represents the implementation of a built-in expression (function or special form)
 #[derive(Clone)]
 pub enum OpKind {
-    /// Regular function that takes arguments and returns a value
-    Function(fn(&[Value]) -> Result<Value, Error>),
+    /// Regular function that takes evaluated arguments and returns a value
+    /// via the canonical erased builtin signature used by the evaluator.
+    Function(Arc<OperationFn>),
     /// Special form that requires access to the environment, unevaluated arguments and current evaluation stack depth
     SpecialForm(fn(&[Value], &mut Environment, usize) -> Result<Value, Error>),
 }
@@ -117,9 +120,7 @@ impl std::fmt::Debug for OpKind {
 impl PartialEq for OpKind {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (OpKind::Function(f1), OpKind::Function(f2)) => {
-                std::ptr::eq(f1 as *const _, f2 as *const _)
-            }
+            (OpKind::Function(f1), OpKind::Function(f2)) => Arc::ptr_eq(f1, f2),
             (OpKind::SpecialForm(f1), OpKind::SpecialForm(f2)) => {
                 std::ptr::eq(f1 as *const _, f2 as *const _)
             }
@@ -168,25 +169,28 @@ impl BuiltinOp {
 // Macro to generate numeric comparison functions
 macro_rules! numeric_comparison {
     ($name:ident, $op:tt, $op_str:expr) => {
-        fn $name(args: &[Value]) -> Result<Value, Error> {
-            // SCHEME-JSONLOGIC-STRICT: Require at least 2 arguments (both standards allow < 2 args but with different semantics)
-            if args.len() < 2 {
-                return Err(Error::arity_error(2, args.len()));
+        fn $name(first: NumberType, rest: NumIter<'_>) -> Result<bool, Error> {
+            let mut iter = rest.peekable();
+
+            // SCHEME-JSONLOGIC-STRICT: Require at least 2 arguments (both
+            // standards allow < 2 args but with different semantics).
+            // If there is no second operand, we have only one argument.
+            if iter.peek().is_none() {
+                return Err(Error::arity_error(2, 1));
             }
 
-            // Chain comparisons: all adjacent pairs must satisfy the comparison
-            for window in args.windows(2) {
-                match window {
-                    [Value::Number(a), Value::Number(b)] => {
-                        if !(a $op b) {
-                            return Ok(Value::Bool(false));
-                        }
-                    }
-                    _ => return Err(Error::TypeError(concat!($op_str, " requires numbers").into())),
+            // Chain comparisons: all adjacent pairs must satisfy the comparison.
+            // Start with the first argument, then compare each subsequent
+            // element against the previous one.
+            let mut prev = first;
+            for current in iter {
+                if !(prev $op current) {
+                    return Ok(false);
                 }
+                prev = current;
             }
 
-            Ok(Value::Bool(true))
+            Ok(true)
         }
     };
 }
@@ -198,391 +202,376 @@ numeric_comparison!(builtin_gt, >, ">");
 numeric_comparison!(builtin_le, <=, "<=");
 numeric_comparison!(builtin_ge, >=, ">=");
 
-fn builtin_add(args: &[Value]) -> Result<Value, Error> {
+fn builtin_add(args: NumIter<'_>) -> Result<NumberType, Error> {
     let mut sum = 0 as NumberType;
     for arg in args {
-        if let Value::Number(n) = arg {
-            sum = sum
-                .checked_add(*n)
-                .ok_or_else(|| Error::EvalError("Integer overflow in addition".into()))?;
-        } else {
-            return Err(Error::TypeError("+ requires numbers".into()));
-        }
+        sum = sum
+            .checked_add(arg)
+            .ok_or_else(|| Error::EvalError("Integer overflow in addition".into()))?;
     }
-    Ok(Value::Number(sum))
+    Ok(sum)
 }
 
-fn builtin_sub(args: &[Value]) -> Result<Value, Error> {
-    match args {
-        [] => Err(Error::arity_error(1, 0)),
-        [Value::Number(first)] => {
-            // Unary minus: check for overflow when negating
-            let result = first
-                .checked_neg()
-                .ok_or_else(|| Error::EvalError("Integer overflow in negation".into()))?;
-            Ok(Value::Number(result))
-        }
-        [Value::Number(first), rest @ ..] => {
-            let mut result = *first;
-            for arg in rest {
-                if let Value::Number(n) = arg {
-                    result = result.checked_sub(*n).ok_or_else(|| {
-                        Error::EvalError("Integer overflow in subtraction".into())
-                    })?;
-                } else {
-                    return Err(Error::TypeError("- requires numbers".into()));
-                }
-            }
-            Ok(Value::Number(result))
-        }
-        _ => Err(Error::TypeError("- requires numbers".into())),
+fn builtin_sub(first: NumberType, rest: NumIter<'_>) -> Result<NumberType, Error> {
+    let mut iter = rest.peekable();
+
+    if iter.peek().is_none() {
+        return first
+            .checked_neg()
+            .ok_or_else(|| Error::EvalError("Integer overflow in negation".into()));
     }
+
+    let mut result = first;
+    for n in iter {
+        result = result
+            .checked_sub(n)
+            .ok_or_else(|| Error::EvalError("Integer overflow in subtraction".into()))?;
+    }
+
+    Ok(result)
 }
 
-fn builtin_mul(args: &[Value]) -> Result<Value, Error> {
-    // SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns 1)
-    if args.is_empty() {
-        return Err(Error::arity_error(1, 0));
+// SCHEME-STRICT: Require at least 1 argument (Scheme R7RS allows 0 args, returns 1)
+fn builtin_mul(first: NumberType, rest: NumIter<'_>) -> Result<NumberType, Error> {
+    let mut product = first;
+    for n in rest {
+        product = product
+            .checked_mul(n)
+            .ok_or_else(|| Error::EvalError("Integer overflow in multiplication".into()))?;
     }
-
-    let mut product = 1 as NumberType;
-    for arg in args {
-        if let Value::Number(n) = arg {
-            product = product
-                .checked_mul(*n)
-                .ok_or_else(|| Error::EvalError("Integer overflow in multiplication".into()))?;
-        } else {
-            return Err(Error::TypeError("* requires numbers".into()));
-        }
-    }
-    Ok(Value::Number(product))
+    Ok(product)
 }
 
-fn builtin_car(args: &[Value]) -> Result<Value, Error> {
-    match args {
-        [Value::List(list)] => match list.as_slice() {
-            [] => Err(Error::EvalError("car of empty list".into())),
-            [first, ..] => Ok(first.clone()),
-        },
-        [_] => Err(Error::TypeError("car requires a list".into())),
-        _ => Err(Error::arity_error(1, args.len())),
+fn builtin_car(mut list: ValueIter<'_>) -> Result<Value, Error> {
+    match list.next() {
+        Some(first) => Ok(first.clone()),
+        None => Err(Error::EvalError("car of empty list".into())),
     }
 }
 
-fn builtin_cdr(args: &[Value]) -> Result<Value, Error> {
-    match args {
-        [Value::List(list)] => match list.as_slice() {
-            [] => Err(Error::EvalError("cdr of empty list".into())),
-            [_, rest @ ..] => Ok(Value::List(rest.to_vec())),
-        },
-        [_] => Err(Error::TypeError("cdr requires a list".into())),
-        _ => Err(Error::arity_error(1, args.len())),
-    }
+fn builtin_cdr(mut list: ValueIter<'_>) -> Result<Value, Error> {
+    let Some(_) = list.next() else {
+        return Err(Error::EvalError("cdr of empty list".into()));
+    };
+
+    let rest: Vec<Value> = list.cloned().collect();
+    Ok(Value::List(rest))
 }
 
-fn builtin_cons(args: &[Value]) -> Result<Value, Error> {
-    match args {
-        [first, Value::List(rest)] => {
-            let mut new_list = vec![first.clone()];
-            new_list.extend_from_slice(rest);
+fn builtin_cons(first: Value, rest: Value) -> Result<Value, Error> {
+    match rest {
+        Value::List(tail) => {
+            let mut new_list = vec![first];
+            new_list.extend_from_slice(&tail);
             Ok(Value::List(new_list))
         }
-        [_, _] => Err(Error::TypeError(
+        _ => Err(Error::TypeError(
             // SCHEME-STRICT: Require second argument to be a list (Scheme R7RS allows improper lists)
             "cons requires a list as second argument".to_owned(),
         )),
-        _ => Err(Error::arity_error(2, args.len())),
     }
 }
 
-fn builtin_list(args: &[Value]) -> Result<Value, Error> {
-    Ok(Value::List(args.to_vec()))
+fn builtin_list(args: ValueIter<'_>) -> Value {
+    Value::List(args.cloned().collect())
 }
 
-fn builtin_null(args: &[Value]) -> Result<Value, Error> {
-    match args {
-        [value] => Ok(Value::Bool(value.is_nil())),
-        _ => Err(Error::arity_error(1, args.len())),
-    }
+fn builtin_null(value: Value) -> bool {
+    value.is_nil()
 }
 
-fn builtin_not(args: &[Value]) -> Result<Value, Error> {
-    match args {
-        [Value::Bool(b)] => Ok(Value::Bool(!b)),
-        [_] => Err(Error::TypeError("not requires a boolean argument".into())),
-        _ => Err(Error::arity_error(1, args.len())),
-    }
+fn builtin_not(b: bool) -> bool {
+    !b
 }
 
-fn builtin_equal(args: &[Value]) -> Result<Value, Error> {
-    match args {
-        [first, second] => {
-            // Scheme's equal? is structural equality for all types
-            // JSONLOGIC-STRICT: Reject type coercion - require same types for equality
-            match (first, second) {
-                (Value::Bool(_), Value::Bool(_))
-                | (Value::Number(_), Value::Number(_))
-                | (Value::String(_), Value::String(_))
-                | (Value::Symbol(_), Value::Symbol(_))
-                | (Value::List(_), Value::List(_)) => {
-                    // Same types - use structural equality
-                    Ok(Value::Bool(first == second))
-                }
-                _ => {
-                    // Different types or non-comparable types - reject type coercion
-                    Err(Error::TypeError(
-                        "JSONLOGIC-STRICT: Equality comparison requires arguments of the same comparable type (no type coercion)".to_owned(),
-                    ))
-                }
-            }
+fn builtin_equal(first: Value, second: Value) -> Result<bool, Error> {
+    // Scheme's equal? is structural equality for all types
+    // JSONLOGIC-STRICT: Reject type coercion - require same types for equality
+    match (&first, &second) {
+        (Value::Bool(_), Value::Bool(_))
+        | (Value::Number(_), Value::Number(_))
+        | (Value::String(_), Value::String(_))
+        | (Value::Symbol(_), Value::Symbol(_))
+        | (Value::List(_), Value::List(_)) => {
+            // Same types - use structural equality
+            Ok(first == second)
         }
-        _ => Err(Error::arity_error(2, args.len())),
+        _ => {
+            // Different types or non-comparable types - reject type coercion
+            Err(Error::TypeError(
+            "JSONLOGIC-STRICT: Equality comparison requires arguments of the same comparable type (no type coercion)".to_owned(),
+        ))
+        }
     }
 }
 
-fn builtin_string_append(args: &[Value]) -> Result<Value, Error> {
+fn builtin_string_append(args: StringIter<'_>) -> String {
     let mut result = String::new();
-    for arg in args {
-        if let Value::String(s) = arg {
-            result.push_str(s);
-        } else {
-            return Err(Error::TypeError(
-                "string-append requires string arguments".into(),
-            ));
-        }
+    for s in args {
+        result.push_str(s);
     }
-    Ok(Value::String(result))
+    result
 }
 
-macro_rules! min_max_op {
-    ($name:ident, $op:ident, $initial:expr, $op_name:expr) => {
-        fn $name(args: &[Value]) -> Result<Value, Error> {
-            if args.is_empty() {
-                return Err(Error::arity_error(1, 0));
-            }
-            let mut result = $initial;
-            for arg in args {
-                if let Value::Number(n) = arg {
-                    result = result.$op(*n);
-                } else {
-                    return Err(Error::TypeError(
-                        concat!($op_name, " requires number arguments").into(),
-                    ));
-                }
-            }
-            Ok(Value::Number(result))
-        }
+fn builtin_max(first: NumberType, rest: NumIter<'_>) -> NumberType {
+    let mut result = first;
+    for n in rest {
+        result = result.max(n);
+    }
+    result
+}
+
+fn builtin_min(first: NumberType, rest: NumIter<'_>) -> NumberType {
+    let mut result = first;
+    for n in rest {
+        result = result.min(n);
+    }
+    result
+}
+
+fn builtin_error(args: ValueIter<'_>) -> Result<Value, Error> {
+    let parts: Vec<String> = args
+        .map(|value| match value {
+            Value::String(s) => s.clone(),
+            _ => format!("{value}"),
+        })
+        .collect();
+
+    let message = if parts.is_empty() {
+        "Error".to_string()
+    } else {
+        parts.join(" ")
     };
+
+    Err(Error::EvalError(message))
 }
 
-min_max_op!(builtin_max, max, NumberType::MIN, "max");
-min_max_op!(builtin_min, min, NumberType::MAX, "min");
-
-fn builtin_error(args: &[Value]) -> Result<Value, Error> {
-    // Convert a value to error message string
-    fn value_to_error_string(value: &Value) -> String {
-        match value {
-            Value::String(s) => s.clone(), // Remove quotes for error messages
-            _ => format!("{value}"),       // Use Display trait for everything else
-        }
+/// Global registry of all built-in operations.
+///
+/// We keep the registry layout as a single contiguous collection of
+/// `BuiltinOp` values for ease of auditing, but the underlying
+/// builtin implementations are wired through the same adapter layer
+/// used for custom builtin registration. This is done once at
+/// initialization time via a `LazyLock`.
+static BUILTIN_OPS: LazyLock<Vec<BuiltinOp>> = LazyLock::new(|| {
+    fn builtin_fixed<Args, F>(f: F) -> Arc<OperationFn>
+    where
+        F: IntoOperation<Args>,
+    {
+        <F as IntoOperation<Args>>::into_operation(f)
     }
 
-    // Build multi-part error message
-    fn build_error_message(first: &Value, rest: &[Value]) -> String {
-        let mut message = value_to_error_string(first);
-        for arg in rest {
-            message.push(' ');
-            message.push_str(&value_to_error_string(arg));
-        }
-        message
+    fn builtin_variadic<Args, F>(f: F) -> Arc<OperationFn>
+    where
+        F: IntoVariadicOperation<Args>,
+    {
+        <F as IntoVariadicOperation<Args>>::into_variadic_operation(f)
     }
 
-    match args {
-        [] => Err(Error::EvalError("Error".into())),
-        [single] => Err(Error::EvalError(value_to_error_string(single))),
-        [first, rest @ ..] => Err(Error::EvalError(build_error_message(first, rest))),
-    }
-}
-
-/// Global registry of all built-in operations as a simple array
-static BUILTIN_OPS: &[BuiltinOp] = &[
-    // Arithmetic operations
-    BuiltinOp {
-        scheme_id: "+",
-        jsonlogic_id: "+",
-        op_kind: OpKind::Function(builtin_add),
-        arity: Arity::AtLeast(0),
-    },
-    BuiltinOp {
-        scheme_id: "-",
-        jsonlogic_id: "-",
-        op_kind: OpKind::Function(builtin_sub),
-        arity: Arity::AtLeast(1),
-    },
-    BuiltinOp {
-        scheme_id: "*",
-        jsonlogic_id: "*",
-        op_kind: OpKind::Function(builtin_mul),
-        arity: Arity::AtLeast(1), // SCHEME-STRICT: Scheme R7RS allows 0 arguments (returns 1)
-    },
-    // Comparison operations
-    BuiltinOp {
-        scheme_id: ">",
-        jsonlogic_id: ">",
-        op_kind: OpKind::Function(builtin_gt),
-        arity: Arity::AtLeast(2),
-    },
-    BuiltinOp {
-        scheme_id: ">=",
-        jsonlogic_id: ">=",
-        op_kind: OpKind::Function(builtin_ge),
-        arity: Arity::AtLeast(2),
-    },
-    BuiltinOp {
-        scheme_id: "<",
-        jsonlogic_id: "<",
-        op_kind: OpKind::Function(builtin_lt),
-        arity: Arity::AtLeast(2),
-    },
-    BuiltinOp {
-        scheme_id: "<=",
-        jsonlogic_id: "<=",
-        op_kind: OpKind::Function(builtin_le),
-        arity: Arity::AtLeast(2),
-    },
-    BuiltinOp {
-        scheme_id: "=",
-        jsonlogic_id: "scheme-numeric-equals",
-        op_kind: OpKind::Function(builtin_eq),
-        arity: Arity::AtLeast(2),
-    },
-    BuiltinOp {
-        scheme_id: "equal?",
-        jsonlogic_id: "===",
-        op_kind: OpKind::Function(builtin_equal),
-        arity: Arity::Exact(2),
-    },
-    // Logical operations
-    BuiltinOp {
-        scheme_id: "not",
-        jsonlogic_id: "!",
-        op_kind: OpKind::Function(builtin_not),
-        arity: Arity::Exact(1),
-    },
-    BuiltinOp {
-        scheme_id: "and",
-        jsonlogic_id: "and",
-        op_kind: OpKind::SpecialForm(eval_and),
-        arity: Arity::AtLeast(1), // SCHEME-STRICT: Scheme R7RS allows 0 arguments (returns #t)
-    },
-    BuiltinOp {
-        scheme_id: "or",
-        jsonlogic_id: "or",
-        op_kind: OpKind::SpecialForm(eval_or),
-        arity: Arity::AtLeast(1), // SCHEME-STRICT: Scheme R7RS allows 0 arguments (returns #f)
-    },
-    // Control flow
-    BuiltinOp {
-        scheme_id: "if",
-        jsonlogic_id: "if",
-        op_kind: OpKind::SpecialForm(eval_if),
-        // SCHEME-JSONLOGIC-STRICT: Require exactly 3 arguments
-        // (Scheme allows 2 args with undefined behavior, JSONLogic allows chaining with >3 args)
-        arity: Arity::Exact(3),
-    },
-    // Special forms for language constructs
-    BuiltinOp {
-        scheme_id: "quote",
-        jsonlogic_id: "scheme-quote",
-        op_kind: OpKind::SpecialForm(eval_quote),
-        arity: Arity::Exact(1),
-    },
-    BuiltinOp {
-        scheme_id: "define",
-        jsonlogic_id: "scheme-define",
-        op_kind: OpKind::SpecialForm(eval_define),
-        arity: Arity::Exact(2),
-    },
-    BuiltinOp {
-        scheme_id: "lambda",
-        jsonlogic_id: "scheme-lambda",
-        op_kind: OpKind::SpecialForm(eval_lambda),
-        // SCHEME-STRICT: Only supports fixed-arity lambdas (lambda (a b c) body)
-        // Does not support variadic forms: (lambda args body) or (lambda (a . rest) body)
-        // Duplicate parameter names are prohibited per R7RS standard
-        arity: Arity::Exact(2),
-    },
-    // List operations
-    BuiltinOp {
-        scheme_id: "car",
-        jsonlogic_id: "scheme-car",
-        op_kind: OpKind::Function(builtin_car),
-        arity: Arity::Exact(1),
-    },
-    BuiltinOp {
-        scheme_id: "cdr",
-        jsonlogic_id: "scheme-cdr",
-        op_kind: OpKind::Function(builtin_cdr),
-        arity: Arity::Exact(1),
-    },
-    BuiltinOp {
-        scheme_id: "cons",
-        jsonlogic_id: "scheme-cons",
-        op_kind: OpKind::Function(builtin_cons),
-        arity: Arity::Exact(2),
-    },
-    BuiltinOp {
-        scheme_id: "list",
-        jsonlogic_id: "scheme-list",
-        op_kind: OpKind::Function(builtin_list),
-        arity: Arity::Any,
-    },
-    BuiltinOp {
-        scheme_id: "null?",
-        jsonlogic_id: "scheme-null?",
-        op_kind: OpKind::Function(builtin_null),
-        arity: Arity::Exact(1),
-    },
-    // String operations
-    BuiltinOp {
-        scheme_id: "string-append",
-        jsonlogic_id: "cat",
-        op_kind: OpKind::Function(builtin_string_append),
-        arity: Arity::Any,
-    },
-    // Math operations
-    BuiltinOp {
-        scheme_id: "max",
-        jsonlogic_id: "max",
-        op_kind: OpKind::Function(builtin_max),
-        arity: Arity::AtLeast(1),
-    },
-    BuiltinOp {
-        scheme_id: "min",
-        jsonlogic_id: "min",
-        op_kind: OpKind::Function(builtin_min),
-        arity: Arity::AtLeast(1),
-    },
-    // Error handling
-    BuiltinOp {
-        scheme_id: "error",
-        jsonlogic_id: "scheme-error",
-        op_kind: OpKind::Function(builtin_error),
-        arity: Arity::Any,
-    },
-];
+    vec![
+        // Arithmetic operations
+        BuiltinOp {
+            scheme_id: "+",
+            jsonlogic_id: "+",
+            op_kind: OpKind::Function(builtin_variadic::<(NumIter<'static>,), _>(builtin_add)),
+            arity: Arity::AtLeast(0),
+        },
+        BuiltinOp {
+            scheme_id: "-",
+            jsonlogic_id: "-",
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_sub,
+            )),
+            arity: Arity::AtLeast(1),
+        },
+        BuiltinOp {
+            scheme_id: "*",
+            jsonlogic_id: "*",
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_mul,
+            )),
+            arity: Arity::AtLeast(1), // SCHEME-STRICT: Scheme R7RS allows 0 arguments (returns 1)
+        },
+        // Comparison operations
+        BuiltinOp {
+            scheme_id: ">",
+            jsonlogic_id: ">",
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_gt,
+            )),
+            arity: Arity::AtLeast(2),
+        },
+        BuiltinOp {
+            scheme_id: ">=",
+            jsonlogic_id: ">=",
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_ge,
+            )),
+            arity: Arity::AtLeast(2),
+        },
+        BuiltinOp {
+            scheme_id: "<",
+            jsonlogic_id: "<",
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_lt,
+            )),
+            arity: Arity::AtLeast(2),
+        },
+        BuiltinOp {
+            scheme_id: "<=",
+            jsonlogic_id: "<=",
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_le,
+            )),
+            arity: Arity::AtLeast(2),
+        },
+        BuiltinOp {
+            scheme_id: "=",
+            jsonlogic_id: "scheme-numeric-equals",
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_eq,
+            )),
+            arity: Arity::AtLeast(2),
+        },
+        BuiltinOp {
+            scheme_id: "equal?",
+            jsonlogic_id: "===",
+            op_kind: OpKind::Function(builtin_fixed::<(Value, Value), _>(builtin_equal)),
+            arity: Arity::Exact(2),
+        },
+        // Logical operations
+        BuiltinOp {
+            scheme_id: "not",
+            jsonlogic_id: "!",
+            op_kind: OpKind::Function(builtin_fixed::<(bool,), _>(builtin_not)),
+            arity: Arity::Exact(1),
+        },
+        BuiltinOp {
+            scheme_id: "and",
+            jsonlogic_id: "and",
+            op_kind: OpKind::SpecialForm(eval_and),
+            arity: Arity::AtLeast(1), // SCHEME-STRICT: Scheme R7RS allows 0 arguments (returns #t)
+        },
+        BuiltinOp {
+            scheme_id: "or",
+            jsonlogic_id: "or",
+            op_kind: OpKind::SpecialForm(eval_or),
+            arity: Arity::AtLeast(1), // SCHEME-STRICT: Scheme R7RS allows 0 arguments (returns #f)
+        },
+        // Control flow
+        BuiltinOp {
+            scheme_id: "if",
+            jsonlogic_id: "if",
+            op_kind: OpKind::SpecialForm(eval_if),
+            // SCHEME-JSONLOGIC-STRICT: Require exactly 3 arguments
+            // (Scheme allows 2 args with undefined behavior, JSONLogic allows chaining with >3 args)
+            arity: Arity::Exact(3),
+        },
+        // Special forms for language constructs
+        BuiltinOp {
+            scheme_id: "quote",
+            jsonlogic_id: "scheme-quote",
+            op_kind: OpKind::SpecialForm(eval_quote),
+            arity: Arity::Exact(1),
+        },
+        BuiltinOp {
+            scheme_id: "define",
+            jsonlogic_id: "scheme-define",
+            op_kind: OpKind::SpecialForm(eval_define),
+            arity: Arity::Exact(2),
+        },
+        BuiltinOp {
+            scheme_id: "lambda",
+            jsonlogic_id: "scheme-lambda",
+            op_kind: OpKind::SpecialForm(eval_lambda),
+            // SCHEME-STRICT: Only supports fixed-arity lambdas (lambda (a b c) body)
+            // Does not support variadic forms: (lambda args body) or (lambda (a . rest) body)
+            // Duplicate parameter names are prohibited per R7RS standard
+            arity: Arity::Exact(2),
+        },
+        // List operations
+        BuiltinOp {
+            scheme_id: "car",
+            jsonlogic_id: "scheme-car",
+            op_kind: OpKind::Function(builtin_fixed::<(ValueIter<'static>,), _>(builtin_car)),
+            arity: Arity::Exact(1),
+        },
+        BuiltinOp {
+            scheme_id: "cdr",
+            jsonlogic_id: "scheme-cdr",
+            op_kind: OpKind::Function(builtin_fixed::<(ValueIter<'static>,), _>(builtin_cdr)),
+            arity: Arity::Exact(1),
+        },
+        BuiltinOp {
+            scheme_id: "cons",
+            jsonlogic_id: "scheme-cons",
+            op_kind: OpKind::Function(builtin_fixed::<(Value, Value), _>(builtin_cons)),
+            arity: Arity::Exact(2),
+        },
+        BuiltinOp {
+            scheme_id: "list",
+            jsonlogic_id: "scheme-list",
+            op_kind: OpKind::Function(builtin_variadic::<(ValueIter<'static>,), _>(builtin_list)),
+            arity: Arity::Any,
+        },
+        BuiltinOp {
+            scheme_id: "null?",
+            jsonlogic_id: "scheme-null?",
+            op_kind: OpKind::Function(builtin_fixed::<(Value,), _>(builtin_null)),
+            arity: Arity::Exact(1),
+        },
+        // String operations
+        BuiltinOp {
+            scheme_id: "string-append",
+            jsonlogic_id: "cat",
+            op_kind: OpKind::Function(builtin_variadic::<(StringIter<'static>,), _>(
+                builtin_string_append,
+            )),
+            arity: Arity::Any,
+        },
+        // Math operations
+        BuiltinOp {
+            scheme_id: "max",
+            jsonlogic_id: "max",
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_max,
+            )),
+            arity: Arity::AtLeast(1),
+        },
+        BuiltinOp {
+            scheme_id: "min",
+            jsonlogic_id: "min",
+            op_kind: OpKind::Function(builtin_variadic::<(NumberType, NumIter<'static>), _>(
+                builtin_min,
+            )),
+            arity: Arity::AtLeast(1),
+        },
+        // Error handling
+        BuiltinOp {
+            scheme_id: "error",
+            jsonlogic_id: "scheme-error",
+            op_kind: OpKind::Function(builtin_variadic::<(ValueIter<'static>,), _>(builtin_error)),
+            arity: Arity::Any,
+        },
+    ]
+});
 
 /// Lazy static map from scheme_id to BuiltinOp (private - use find_builtin_op_by_scheme_id)
-static BUILTIN_SCHEME: LazyLock<HashMap<&'static str, &'static BuiltinOp>> =
-    LazyLock::new(|| BUILTIN_OPS.iter().map(|op| (op.scheme_id, op)).collect());
+static BUILTIN_SCHEME: LazyLock<HashMap<&'static str, &'static BuiltinOp>> = LazyLock::new(|| {
+    let ops: &'static [BuiltinOp] = BUILTIN_OPS.as_slice();
+    ops.iter().map(|op| (op.scheme_id, op)).collect()
+});
 
 /// Lazy static map from jsonlogic_id to BuiltinOp (private - use find_builtin_op_by_jsonlogic_id)
 static BUILTIN_JSONLOGIC: LazyLock<HashMap<&'static str, &'static BuiltinOp>> =
-    LazyLock::new(|| BUILTIN_OPS.iter().map(|op| (op.jsonlogic_id, op)).collect());
+    LazyLock::new(|| {
+        let ops: &'static [BuiltinOp] = BUILTIN_OPS.as_slice();
+        ops.iter().map(|op| (op.jsonlogic_id, op)).collect()
+    });
 
 /// Get all builtin operations (for internal use by evaluator)
 pub(crate) fn get_builtin_ops() -> &'static [BuiltinOp] {
-    BUILTIN_OPS
+    BUILTIN_OPS.as_slice()
 }
 
 /// Find a builtin operation by its Scheme identifier
@@ -616,6 +605,21 @@ mod tests {
         Some(val(value))
     }
 
+    /// Helper to invoke a builtin through the public registry using
+    /// the canonical erased signature (Vec<Value> -> Result<Value, Error>).
+    ///
+    /// This keeps tests independent of the internal typed helper
+    /// function signatures while still exercising the adapter layer.
+    fn call_builtin(name: &str, args: &[Value]) -> Result<Value, Error> {
+        let op = find_scheme_op(name).expect("builtin not found");
+        match &op.op_kind {
+            OpKind::Function(func) => func(args.to_vec()),
+            OpKind::SpecialForm(_) => {
+                panic!("expected function builtin in tests, got special form: {name}")
+            }
+        }
+    }
+
     #[test]
     fn test_builtin_ops_registry() {
         // Test lookup by both scheme and jsonlogic ids
@@ -633,7 +637,7 @@ mod tests {
         assert!(!add_op.is_special_form());
 
         if let OpKind::Function(func) = &add_op.op_kind {
-            let result = func(&[val(1), val(2)]).unwrap();
+            let result = func(vec![val(1), val(2)]).unwrap();
             assert_eq!(result, val(3));
         } else {
             panic!("Expected Function variant");
@@ -692,10 +696,10 @@ mod tests {
         );
     }
 
-    /// Macro to create test cases with identifying information for better error messages
+    /// Macro to create test cases, invoking builtins via the registry.
     macro_rules! test {
-        ($expr:expr, $expected:expr) => {
-            (stringify!($expr), $expr, $expected)
+        ($name:expr, $args:expr, $expected:expr) => {
+            ($name, call_builtin($name, $args), $expected)
         };
     }
 
@@ -735,236 +739,240 @@ mod tests {
             // =================================================================
 
             // Test arithmetic functions - addition
-            test!(builtin_add(&[]), success(0)),       // Identity
-            test!(builtin_add(&[val(5)]), success(5)), // Single number
-            test!(builtin_add(&[val(1), val(2), val(3)]), success(6)), // Multiple numbers
-            test!(builtin_add(&[val(-5), val(10)]), success(5)), // Negative numbers
-            test!(builtin_add(&[val(0), val(0), val(0)]), success(0)), // Zeros
+            test!("+", &[], success(0)),                       // Identity
+            test!("+", &[val(5)], success(5)),                 // Single number
+            test!("+", &[val(1), val(2), val(3)], success(6)), // Multiple numbers
+            test!("+", &[val(-5), val(10)], success(5)),       // Negative numbers
+            test!("+", &[val(0), val(0), val(0)], success(0)), // Zeros
             // Test addition error cases
-            test!(builtin_add(&[val("not a number")]), None), // Invalid type
-            test!(builtin_add(&[val(1), val(true)]), None),   // Mixed types
+            test!("+", &[val("not a number")], None), // Invalid type
+            test!("+", &[val(1), val(true)], None),   // Mixed types
             // Test arithmetic functions - subtraction
-            test!(builtin_sub(&[val(5)]), success(-5)), // Unary minus
-            test!(builtin_sub(&[val(-5)]), success(5)), // Unary minus of negative
-            test!(builtin_sub(&[val(10), val(3), val(2)]), success(5)), // Multiple subtraction
-            test!(builtin_sub(&[val(0), val(5)]), success(-5)), // Zero minus number
-            test!(builtin_sub(&[val(10), val(0)]), success(10)), // Number minus zero
+            test!("-", &[val(5)], success(-5)), // Unary minus
+            test!("-", &[val(-5)], success(5)), // Unary minus of negative
+            test!("-", &[val(10), val(3), val(2)], success(5)), // Multiple subtraction
+            test!("-", &[val(0), val(5)], success(-5)), // Zero minus number
+            test!("-", &[val(10), val(0)], success(10)), // Number minus zero
             // Test subtraction error cases
-            test!(builtin_sub(&[]), None), // No arguments
-            test!(builtin_sub(&[val("not a number")]), None),
-            test!(builtin_sub(&[val(5), val(false)]), None),
+            test!("-", &[], None), // No arguments
+            test!("-", &[val("not a number")], None),
+            test!("-", &[val(5), val(false)], None),
             // Test arithmetic functions - multiplication
             // SCHEME-STRICT: We require at least 1 argument (Scheme R7RS allows 0 args, returns 1)
-            test!(builtin_mul(&[]), None), // No arguments should error
-            test!(builtin_mul(&[val(5)]), success(5)), // Single number
-            test!(builtin_mul(&[val(2), val(3), val(4)]), success(24)), // Multiple numbers
-            test!(builtin_mul(&[val(-2), val(3)]), success(-6)), // Negative numbers
-            test!(builtin_mul(&[val(0), val(100)]), success(0)), // Zero multiplication
-            test!(builtin_mul(&[val(1), val(1), val(1)]), success(1)), // Ones
+            test!("*", &[], None),             // No arguments should error
+            test!("*", &[val(5)], success(5)), // Single number
+            test!("*", &[val(2), val(3), val(4)], success(24)), // Multiple numbers
+            test!("*", &[val(-2), val(3)], success(-6)), // Negative numbers
+            test!("*", &[val(0), val(100)], success(0)), // Zero multiplication
+            test!("*", &[val(1), val(1), val(1)], success(1)), // Ones
             // Test multiplication error cases
-            test!(builtin_mul(&[val("not a number")]), None),
-            test!(builtin_mul(&[val(2), nil()]), None),
+            test!("*", &[val("not a number")], None),
+            test!("*", &[val(2), nil()], None),
             // Test comparison functions - greater than
-            test!(builtin_gt(&[val(7), val(3)]), success(true)),
-            test!(builtin_gt(&[val(3), val(8)]), success(false)),
-            test!(builtin_gt(&[val(4), val(4)]), success(false)), // Equal case
-            test!(builtin_gt(&[val(-1), val(-2)]), success(true)), // Negative numbers
+            test!(">", &[val(7), val(3)], success(true)),
+            test!(">", &[val(3), val(8)], success(false)),
+            test!(">", &[val(4), val(4)], success(false)), // Equal case
+            test!(">", &[val(-1), val(-2)], success(true)), // Negative numbers
             // Test chaining behavior: 9 > 6 > 2 should be true since all adjacent pairs satisfy >
-            test!(builtin_gt(&[val(9), val(6), val(2)]), success(true)), // Chaining true
+            test!(">", &[val(9), val(6), val(2)], success(true)), // Chaining true
             // Test chaining that should fail: 9 > 6 > 7 should be false since 6 > 7 is false
-            test!(builtin_gt(&[val(9), val(6), val(7)]), success(false)), // Chaining false
+            test!(">", &[val(9), val(6), val(7)], success(false)), // Chaining false
             // Test comparison error cases (wrong number of args or wrong types)
-            test!(builtin_gt(&[val(5)]), None), // Too few args
-            test!(builtin_gt(&[val("a"), val(3)]), None), // Wrong type
+            test!(">", &[val(5)], None),           // Too few args
+            test!(">", &[val("a"), val(3)], None), // Wrong type
             // Test comparison functions - greater than or equal
-            test!(builtin_ge(&[val(8), val(3)]), success(true)),
-            test!(builtin_ge(&[val(2), val(6)]), success(false)),
-            test!(builtin_ge(&[val(7), val(7)]), success(true)), // Equal case
+            test!(">=", &[val(8), val(3)], success(true)),
+            test!(">=", &[val(2), val(6)], success(false)),
+            test!(">=", &[val(7), val(7)], success(true)), // Equal case
             // Test comparison functions - less than
-            test!(builtin_lt(&[val(2), val(9)]), success(true)),
-            test!(builtin_lt(&[val(8), val(4)]), success(false)),
-            test!(builtin_lt(&[val(6), val(6)]), success(false)), // Equal case
+            test!("<", &[val(2), val(9)], success(true)),
+            test!("<", &[val(8), val(4)], success(false)),
+            test!("<", &[val(6), val(6)], success(false)), // Equal case
             // Test numeric comparison chaining: 1 < 2 < 3 (all adjacent pairs satisfy <)
-            test!(builtin_lt(&[val(1), val(2), val(3)]), success(true)), // Chaining true
+            test!("<", &[val(1), val(2), val(3)], success(true)), // Chaining true
             // Test chaining that should fail: 1 < 3 but not 3 < 2
-            test!(builtin_lt(&[val(1), val(3), val(2)]), success(false)), // Chaining false
+            test!("<", &[val(1), val(3), val(2)], success(false)), // Chaining false
             // Test comparison functions - less than or equal
-            test!(builtin_le(&[val(4), val(9)]), success(true)),
-            test!(builtin_le(&[val(8), val(2)]), success(false)),
-            test!(builtin_le(&[val(3), val(3)]), success(true)), // Equal case
+            test!("<=", &[val(4), val(9)], success(true)),
+            test!("<=", &[val(8), val(2)], success(false)),
+            test!("<=", &[val(3), val(3)], success(true)), // Equal case
             // Test numeric equality
-            test!(builtin_eq(&[val(12), val(12)]), success(true)),
-            test!(builtin_eq(&[val(8), val(3)]), success(false)),
-            test!(builtin_eq(&[val(0), val(0)]), success(true)),
-            test!(builtin_eq(&[val(-1), val(-1)]), success(true)),
-            test!(builtin_eq(&[val(7), val(7), val(7)]), success(true)), // 7 = 7 = 7 (all equal)
-            test!(builtin_eq(&[val(9), val(9), val(4)]), success(false)), // 9 = 9 but not 9 = 4
+            test!("=", &[val(12), val(12)], success(true)),
+            test!("=", &[val(8), val(3)], success(false)),
+            test!("=", &[val(0), val(0)], success(true)),
+            test!("=", &[val(-1), val(-1)], success(true)),
+            test!("=", &[val(7), val(7), val(7)], success(true)), // 7 = 7 = 7 (all equal)
+            test!("=", &[val(9), val(9), val(4)], success(false)), // 9 = 9 but not 9 = 4
             // Test structural equality (equal?)
-            test!(builtin_equal(&[val(11), val(11)]), success(true)),
-            test!(builtin_equal(&[val(15), val(3)]), success(false)),
-            test!(builtin_equal(&[val("hello"), val("hello")]), success(true)),
-            test!(builtin_equal(&[val("hello"), val("world")]), success(false)),
-            test!(builtin_equal(&[val(true), val(true)]), success(true)),
-            test!(builtin_equal(&[val(true), val(false)]), success(false)),
-            test!(builtin_equal(&[nil(), nil()]), success(true)),
-            test!(builtin_equal(&[val([1]), val([1])]), success(true)),
-            test!(builtin_equal(&[val(5), val("5")]), None), // Different types - now rejected
+            test!("equal?", &[val(11), val(11)], success(true)),
+            test!("equal?", &[val(15), val(3)], success(false)),
+            test!("equal?", &[val("hello"), val("hello")], success(true)),
+            test!("equal?", &[val("hello"), val("world")], success(false)),
+            test!("equal?", &[val(true), val(true)], success(true)),
+            test!("equal?", &[val(true), val(false)], success(false)),
+            test!("equal?", &[nil(), nil()], success(true)),
+            test!("equal?", &[val([1]), val([1])], success(true)),
+            test!("equal?", &[val(5), val("5")], None), // Different types - now rejected
             // Test equal? error cases (structural equality requires exactly 2 args)
-            test!(builtin_equal(&[val(5)]), None), // Too few args
-            test!(builtin_equal(&[val(5), val(3), val(1)]), None), // Too many args
+            test!("equal?", &[val(5)], None), // Too few args
+            test!("equal?", &[val(5), val(3), val(1)], None), // Too many args
             // Test logical functions - not
-            test!(builtin_not(&[val(true)]), success(false)),
-            test!(builtin_not(&[val(false)]), success(true)),
+            test!("not", &[val(true)], success(false)),
+            test!("not", &[val(false)], success(true)),
             // Test not error cases
-            test!(builtin_not(&[]), None), // No args
-            test!(builtin_not(&[val(true), val(false)]), None), // Too many args
-            test!(builtin_not(&[val(1)]), None), // Wrong type
-            test!(builtin_not(&[val("true")]), None), // Wrong type
+            test!("not", &[], None),                      // No args
+            test!("not", &[val(true), val(false)], None), // Too many args
+            test!("not", &[val(1)], None),                // Wrong type
+            test!("not", &[val("true")], None),           // Wrong type
             // Test list functions - car
-            test!(builtin_car(&[val([1, 2, 3])]), success(1)), // First element
-            test!(builtin_car(&[val(["only"])]), success("only")), // Single element
-            test!(builtin_car(&[val([val([1]), val(2)])]), success([1])), // Nested list
+            test!("car", &[val([1, 2, 3])], success(1)), // First element
+            test!("car", &[val(["only"])], success("only")), // Single element
+            test!("car", &[val([val([1]), val(2)])], success([1])), // Nested list
             // Test car error cases
-            test!(builtin_car(&[]), None), // No args
-            test!(builtin_car(&[int_list.clone(), int_list.clone()]), None), // Too many args
-            test!(builtin_car(&[nil()]), None), // Empty list
-            test!(builtin_car(&[val(42)]), None), // Not a list
-            test!(builtin_car(&[val("not a list")]), None), // Not a list
+            test!("car", &[], None), // No args
+            test!("car", &[int_list.clone(), int_list.clone()], None), // Too many args
+            test!("car", &[nil()], None), // Empty list
+            test!("car", &[val(42)], None), // Not a list
+            test!("car", &[val("not a list")], None), // Not a list
             // Test list functions - cdr
-            test!(builtin_cdr(&[val([1, 2, 3])]), success([2, 3])), // Rest of list
-            test!(builtin_cdr(&[val(["only"])]), Some(nil())),      // Single element -> empty
-            test!(builtin_cdr(&[val([1, 2])]), success([2])),       // Two elements
+            test!("cdr", &[val([1, 2, 3])], success([2, 3])), // Rest of list
+            test!("cdr", &[val(["only"])], Some(nil())),      // Single element -> empty
+            test!("cdr", &[val([1, 2])], success([2])),       // Two elements
             // Test cdr error cases
-            test!(builtin_cdr(&[]), None), // No args
-            test!(builtin_cdr(&[int_list.clone(), int_list]), None), // Too many args
-            test!(builtin_cdr(&[nil()]), None), // Empty list
-            test!(builtin_cdr(&[val(true)]), None), // Not a list
+            test!("cdr", &[], None),                           // No args
+            test!("cdr", &[int_list.clone(), int_list], None), // Too many args
+            test!("cdr", &[nil()], None),                      // Empty list
+            test!("cdr", &[val(true)], None),                  // Not a list
             // Test list functions - cons
-            test!(builtin_cons(&[val(0), val([1, 2])]), success([0, 1, 2])), // Prepend to list
-            test!(builtin_cons(&[val("first"), nil()]), success(["first"])), // Cons to empty
-            test!(
-                builtin_cons(&[val([1]), val([2])]),
-                success([val([1]), val(2)])
-            ), // Nested cons
+            test!("cons", &[val(0), val([1, 2])], success([0, 1, 2])), // Prepend to list
+            test!("cons", &[val("first"), nil()], success(["first"])), // Cons to empty
+            test!("cons", &[val([1]), val([2])], success([val([1]), val(2)])), // Nested cons
             // Test cons error cases
-            test!(builtin_cons(&[]), None),       // No args
-            test!(builtin_cons(&[val(1)]), None), // Too few args
-            test!(builtin_cons(&[val(1), val(2), val(3)]), None), // Too many args
-            test!(builtin_cons(&[val(1), val(2)]), None), // Second arg not a list
-            test!(builtin_cons(&[val(1), val("not a list")]), None), // Second arg not a list
+            test!("cons", &[], None),                          // No args
+            test!("cons", &[val(1)], None),                    // Too few args
+            test!("cons", &[val(1), val(2), val(3)], None),    // Too many args
+            test!("cons", &[val(1), val(2)], None),            // Second arg not a list
+            test!("cons", &[val(1), val("not a list")], None), // Second arg not a list
             // Test list functions - list
-            test!(builtin_list(&[]), Some(nil())), // Empty list
-            test!(builtin_list(&[val(1)]), success([1])), // Single element
+            test!("list", &[], Some(nil())),        // Empty list
+            test!("list", &[val(1)], success([1])), // Single element
             test!(
-                builtin_list(&[val(1), val("hello"), val(true)]),
+                "list",
+                &[val(1), val("hello"), val(true)],
                 success([val(1), val("hello"), val(true)])
             ), // Mixed types
-            test!(
-                builtin_list(&[val([1]), val(2)]),
-                success([val([1]), val(2)])
-            ), // Nested lists
+            test!("list", &[val([1]), val(2)], success([val([1]), val(2)])), // Nested lists
             // Test null? function
-            test!(builtin_null(&[nil()]), success(true)), // Empty list is nil
-            test!(builtin_null(&[val(42)]), success(false)), // Number is not nil
-            test!(builtin_null(&[val("")]), success(false)), // Empty string is not nil
-            test!(builtin_null(&[val(false)]), success(false)), // False is not nil
-            test!(builtin_null(&[val([1])]), success(false)), // Non-empty list is not nil
+            test!("null?", &[nil()], success(true)), // Empty list is nil
+            test!("null?", &[val(42)], success(false)), // Number is not nil
+            test!("null?", &[val("")], success(false)), // Empty string is not nil
+            test!("null?", &[val(false)], success(false)), // False is not nil
+            test!("null?", &[val([1])], success(false)), // Non-empty list is not nil
             // Test null? error cases
-            test!(builtin_null(&[]), None),               // No args
-            test!(builtin_null(&[val(1), val(2)]), None), // Too many args
+            test!("null?", &[], None),               // No args
+            test!("null?", &[val(1), val(2)], None), // Too many args
             // Test error function
-            test!(builtin_error(&[]), None), // No args - should produce generic error
-            test!(builtin_error(&[val("test error")]), None), // String message
-            test!(builtin_error(&[val(42)]), None), // Number message
-            test!(builtin_error(&[val(true)]), None), // Bool message
-            test!(
-                builtin_error(&[val("Error:"), val("Something went wrong")]),
-                None
-            ), // Multiple args
+            test!("error", &[], None), // No args - should produce generic error
+            test!("error", &[val("test error")], None), // String message
+            test!("error", &[val(42)], None), // Number message
+            test!("error", &[val(true)], None), // Bool message
+            test!("error", &[val("Error:"), val("Something went wrong")], None), // Multiple args
             // =================================================================
             // ARITHMETIC EDGE CASES
             // =================================================================
 
             // Integer overflow cases (should fail)
-            test!(builtin_add(&[val(NumberType::MAX), val(1)]), None), // Addition overflow
-            test!(builtin_mul(&[val(NumberType::MAX), val(2)]), None), // Multiplication overflow
-            test!(builtin_sub(&[val(NumberType::MIN)]), None),         // Negation overflow
-            test!(builtin_sub(&[val(NumberType::MIN), val(1)]), None), // Subtraction overflow
+            test!("+", &[val(NumberType::MAX), val(1)], None), // Addition overflow
+            test!("*", &[val(NumberType::MAX), val(2)], None), // Multiplication overflow
+            test!("-", &[val(NumberType::MIN)], None),         // Negation overflow
+            test!("-", &[val(NumberType::MIN), val(1)], None), // Subtraction overflow
             // Boundary values (should succeed)
             test!(
-                builtin_add(&[val(NumberType::MAX), val(0)]),
+                "+",
+                &[val(NumberType::MAX), val(0)],
                 success(NumberType::MAX)
             ),
             test!(
-                builtin_sub(&[val(NumberType::MIN), val(0)]),
+                "-",
+                &[val(NumberType::MIN), val(0)],
                 success(NumberType::MIN)
             ),
             test!(
-                builtin_mul(&[val(NumberType::MAX), val(1)]),
+                "*",
+                &[val(NumberType::MAX), val(1)],
                 success(NumberType::MAX)
             ),
-            test!(builtin_mul(&[val(0), val(NumberType::MAX)]), success(0)),
+            test!("*", &[val(0), val(NumberType::MAX)], success(0)),
             // Operations with zero
-            test!(builtin_add(&[val(0)]), success(0)),
-            test!(builtin_sub(&[val(0)]), success(0)),
-            test!(builtin_mul(&[val(0)]), success(0)),
+            test!("+", &[val(0)], success(0)),
+            test!("-", &[val(0)], success(0)),
+            test!("*", &[val(0)], success(0)),
             // Large chain operations
-            test!(builtin_add(&many_ones), success(100)),
-            test!(builtin_mul(&many_ones), success(1)),
+            test!("+", &many_ones, success(100)),
+            test!("*", &many_ones, success(1)),
             // =================================================================
             // COMPARISON EDGE CASES
             // =================================================================
 
             // Boundary comparisons
             test!(
-                builtin_gt(&[val(NumberType::MAX), val(NumberType::MIN)]),
+                ">",
+                &[val(NumberType::MAX), val(NumberType::MIN)],
                 success(true)
             ),
             test!(
-                builtin_lt(&[val(NumberType::MIN), val(NumberType::MAX)]),
+                "<",
+                &[val(NumberType::MIN), val(NumberType::MAX)],
                 success(true)
             ),
             test!(
-                builtin_ge(&[val(NumberType::MAX), val(NumberType::MAX)]),
+                ">=",
+                &[val(NumberType::MAX), val(NumberType::MAX)],
                 success(true)
             ),
             test!(
-                builtin_le(&[val(NumberType::MIN), val(NumberType::MIN)]),
+                "<=",
+                &[val(NumberType::MIN), val(NumberType::MIN)],
                 success(true)
             ),
             // Long chain comparisons
             test!(
-                builtin_lt(&[val(-5), val(-2), val(0), val(3), val(10)]),
+                "<",
+                &[val(-5), val(-2), val(0), val(3), val(10)],
                 success(true)
             ),
             test!(
-                builtin_gt(&[val(10), val(5), val(0), val(-3), val(-8)]),
+                ">",
+                &[val(10), val(5), val(0), val(-3), val(-8)],
                 success(true)
             ),
-            test!(builtin_lt(&[val(1), val(2), val(1)]), success(false)), // 2 > 1 fails
+            test!("<", &[val(1), val(2), val(1)], success(false)), // 2 > 1 fails
             // Numeric equality with many values
-            test!(builtin_eq(&all_fives), success(true)),
-            test!(builtin_eq(&mostly_fives), success(false)),
+            test!("=", &all_fives, success(true)),
+            test!("=", &mostly_fives, success(false)),
             // =================================================================
             // LIST OPERATIONS EDGE CASES
             // =================================================================
 
             // Deeply nested lists
-            test!(builtin_car(&[nested]), success([val([1])])),
+            test!("car", &[nested], success([val([1])])),
             // Mixed type lists operations
-            test!(builtin_car(std::slice::from_ref(&mixed)), success(1)),
+            test!("car", std::slice::from_ref(&mixed), success(1)),
             test!(
-                builtin_cdr(std::slice::from_ref(&mixed)),
+                "cdr",
+                std::slice::from_ref(&mixed),
                 success([val("hello"), val(true), nil()])
             ),
             // Cons with various types
             test!(
-                builtin_cons(&[val(true), val([val(1), val(2)])]),
+                "cons",
+                &[val(true), val([val(1), val(2)])],
                 success([val(true), val(1), val(2)])
             ),
             // List creation with many elements
             test!(
-                builtin_list(&many_elements),
+                "list",
+                &many_elements,
                 success((0..50).map(val).collect::<Vec<_>>())
             ),
             // =================================================================
@@ -972,64 +980,66 @@ mod tests {
             // =================================================================
 
             // Basic string concatenation
-            test!(builtin_string_append(&[]), success("")),
-            test!(builtin_string_append(&[val("hello")]), success("hello")),
+            test!("string-append", &[], success("")),
+            test!("string-append", &[val("hello")], success("hello")),
             test!(
-                builtin_string_append(&[val("hello"), val(" "), val("world")]),
+                "string-append",
+                &[val("hello"), val(" "), val("world")],
                 success("hello world")
             ),
             test!(
-                builtin_string_append(&[val(""), val("test"), val("")]),
+                "string-append",
+                &[val(""), val("test"), val("")],
                 success("test")
             ),
             // Error cases - non-string arguments
-            test!(builtin_string_append(&[val(42)]), None),
-            test!(builtin_string_append(&[val("hello"), val(123)]), None),
-            test!(builtin_string_append(&[val(true), val("world")]), None),
+            test!("string-append", &[val(42)], None),
+            test!("string-append", &[val("hello"), val(123)], None),
+            test!("string-append", &[val(true), val("world")], None),
             // =================================================================
             // MATH OPERATIONS - MAX/MIN
             // =================================================================
 
             // Basic max operations
-            test!(builtin_max(&[val(5)]), success(5)),
-            test!(builtin_max(&[val(1), val(2), val(3)]), success(3)),
-            test!(builtin_max(&[val(3), val(1), val(2)]), success(3)),
-            test!(builtin_max(&[val(-5), val(-1), val(-10)]), success(-1)),
+            test!("max", &[val(5)], success(5)),
+            test!("max", &[val(1), val(2), val(3)], success(3)),
+            test!("max", &[val(3), val(1), val(2)], success(3)),
+            test!("max", &[val(-5), val(-1), val(-10)], success(-1)),
             // Basic min operations
-            test!(builtin_min(&[val(5)]), success(5)),
-            test!(builtin_min(&[val(1), val(2), val(3)]), success(1)),
-            test!(builtin_min(&[val(3), val(1), val(2)]), success(1)),
-            test!(builtin_min(&[val(-5), val(-1), val(-10)]), success(-10)),
+            test!("min", &[val(5)], success(5)),
+            test!("min", &[val(1), val(2), val(3)], success(1)),
+            test!("min", &[val(3), val(1), val(2)], success(1)),
+            test!("min", &[val(-5), val(-1), val(-10)], success(-10)),
             // Error cases - no arguments
-            test!(builtin_max(&[]), None),
-            test!(builtin_min(&[]), None),
+            test!("max", &[], None),
+            test!("min", &[], None),
             // Error cases - non-number arguments
-            test!(builtin_max(&[val("hello")]), None),
-            test!(builtin_min(&[val(true)]), None),
-            test!(builtin_max(&[val(1), val("hello")]), None),
-            test!(builtin_min(&[val(1), val(true)]), None),
+            test!("max", &[val("hello")], None),
+            test!("min", &[val(true)], None),
+            test!("max", &[val(1), val("hello")], None),
+            test!("min", &[val(1), val(true)], None),
             // =================================================================
             // EQUALITY STRICT TYPING - OVERRIDE BASIC EQUAL TESTS
             // =================================================================
 
             // Type coercion rejection (these should fail)
-            test!(builtin_equal(&[val(1), val("1")]), None),
-            test!(builtin_equal(&[val(0), val(false)]), None),
-            test!(builtin_equal(&[val(true), val(1)]), None),
-            test!(builtin_equal(&[val(""), nil()]), None),
-            test!(builtin_equal(&[val(Vec::<Value>::new()), val(false)]), None),
+            test!("equal?", &[val(1), val("1")], None),
+            test!("equal?", &[val(0), val(false)], None),
+            test!("equal?", &[val(true), val(1)], None),
+            test!("equal?", &[val(""), nil()], None),
+            test!("equal?", &[val(Vec::<Value>::new()), val(false)], None),
             // Complex same-type structures
-            test!(builtin_equal(&[complex1.clone(), complex2]), success(true)),
-            test!(builtin_equal(&[complex1, complex3]), success(false)),
+            test!("equal?", &[complex1.clone(), complex2], success(true)),
+            test!("equal?", &[complex1, complex3], success(false)),
             // =================================================================
             // LOGICAL OPERATIONS STRICT - ADDITIONAL ERROR CASES
             // =================================================================
 
             // Non-boolean inputs should fail
-            test!(builtin_not(&[val(0)]), None),
-            test!(builtin_not(&[val("")]), None),
-            test!(builtin_not(&[nil()]), None),
-            test!(builtin_not(&[val("false")]), None),
+            test!("not", &[val(0)], None),
+            test!("not", &[val("")], None),
+            test!("not", &[nil()], None),
+            test!("not", &[val("false")], None),
         ];
 
         for (test_expr, result, expected) in test_cases {
@@ -1064,7 +1074,7 @@ mod tests {
         ];
 
         for (args, expected_msg) in test_cases {
-            match builtin_error(&args).unwrap_err() {
+            match call_builtin("error", &args).unwrap_err() {
                 Error::EvalError(msg) => {
                     assert_eq!(msg, expected_msg, "Failed for args: {args:?}");
                 }

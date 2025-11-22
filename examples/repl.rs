@@ -40,7 +40,7 @@ fn run_repl() {
     let mut env = evaluator::create_global_env();
 
     // Register custom function that can be called from user code for demonstration purposes
-    env.register_builtin_function("help", print_help);
+    env.register_builtin_operation::<()>("help", print_help);
 
     let mut jsonlogic_mode = false;
 
@@ -58,7 +58,7 @@ fn run_repl() {
                 // Handle special commands
                 match line {
                     ":help" => {
-                        _ = print_help(&[]).is_ok();
+                        _ = print_help().is_ok();
                         continue;
                     }
                     ":env" => {
@@ -144,11 +144,7 @@ fn run_repl() {
     }
 }
 
-fn print_help(args: &[Value]) -> Result<Value, Error> {
-    if !args.is_empty() {
-        return Err(Error::arity_error(0, args.len()));
-    }
-
+fn print_help() -> Result<Value, Error> {
     println!("Mini Scheme Interpreter with JSONLogic Support:");
     println!("  :help      - Show this help message");
     println!("  :env       - Show current environment bindings");
