@@ -19,11 +19,13 @@ pub(crate) type NumberType = i64;
 
 /// Allowed non-alphanumeric characters in Scheme symbol names
 /// Most represent mathematical symbols or predicates ("?"), "$" supported for JavaScript identifiers
+#[cfg(any(feature = "scheme", feature = "jsonlogic"))]
 pub(crate) const SYMBOL_SPECIAL_CHARS: &str = "+-*/<>=!?_$";
 
 /// Check if a string is a valid symbol name
 /// Valid: non-empty, no leading digit, no "-digit" prefix, alphanumeric + SYMBOL_SPECIAL_CHARS
 /// Note: This function is tested as part of the parser tests in parser.rs
+#[cfg(any(feature = "scheme", feature = "jsonlogic"))]
 pub(crate) fn is_valid_symbol(name: &str) -> bool {
     let mut chars = name.chars();
 
