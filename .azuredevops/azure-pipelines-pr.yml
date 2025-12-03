@@ -1,0 +1,33 @@
+# PR validation pipeline for microsoft/rulesxp
+# - Triggered on GitHub pull requests targeting main
+# - Annotates the build name with PR metadata so ADO has access to this info.
+
+trigger: none
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - powershell: |
+      Write-Host "Build.Reason: $env:BUILD_REASON"
+      Write-Host "PR number (GitHub): $env:SYSTEM_PULLREQUEST_PULLREQUESTNUMBER"
+      Write-Host "From (source branch): $env:SYSTEM_PULLREQUEST_SOURCEBRANCH"
+      Write-Host "To   (target branch): $env:SYSTEM_PULLREQUEST_TARGETBRANCH"
+      Write-Host "Repo: $env:BUILD_REPOSITORY_NAME"
+
+      # Compose a concise build name for email subjects / UI
+      $status = if ($env:BUILD_REASON -eq 'PullRequest') { 'PR validation' } else { $env:BUILD_REASON }
+      $prId = if ($env:SYSTEM_PULLREQUEST_PULLREQUESTNUMBER) { $env:SYSTEM_PULLREQUEST_PULLREQUESTNUMBER } else { 'n/a' }
+      $commitMsg = $env:BUILD_SOURCEVERSIONMESSAGE
+      if (-not [string]::IsNullOrEmpty($commitMsg) -and $commitMsg.Length -gt 60) {
+        $commitMsg = $commitMsg.Substring(0,60) + '…'
+      }
+
+      $buildName = "PR $prId - $status - $commitMsg"
+      Write-Host "##vso[build.updatebuildnumber]$buildName"
+    displayName: "Annotate build with PR metadata"
