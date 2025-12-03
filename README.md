@@ -157,7 +157,7 @@ Rust functions. These are registered as **builtin operations** on the
 #### Fixed-arity builtins
 
 ```rust
-use rulesxp::{Error, ast::Value, evaluator};
+use rulesxp::{Error, Value, evaluator};
 
 // Infallible builtin: returns a bare i64
 fn add2(a: i64, b: i64) -> i64 {
@@ -187,9 +187,8 @@ For list-style and variadic behavior, use the iterator-based
 parameter types from `rulesxp::evaluator`.
 
 ```rust
-use rulesxp::{Error, ast::Value, evaluator};
-use rulesxp::builtinops::Arity;
-use rulesxp::evaluator::{NumIter, ValueIter};
+use rulesxp::{Error, Value, evaluator};
+use rulesxp::evaluator::{Arity, NumIter, ValueIter};
 
 // Single list argument: (sum-list (list 1 2 3 4)) => 10
 fn sum_list(nums: NumIter<'_>) -> i64 {

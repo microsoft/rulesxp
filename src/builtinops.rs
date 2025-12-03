@@ -53,50 +53,12 @@ use crate::Error;
 use crate::ast::{NumberType, Value};
 use crate::evaluator::intooperation::{IntoOperation, IntoVariadicOperation, OperationFn};
 use crate::evaluator::{
-    Environment, NumIter, StringIter, ValueIter, eval_and, eval_define, eval_if, eval_lambda,
-    eval_or, eval_quote,
+    Arity, Environment, NumIter, StringIter, ValueIter, eval_and, eval_define, eval_if,
+    eval_lambda, eval_or, eval_quote,
 };
+#[cfg(any(feature = "scheme", feature = "jsonlogic", test))]
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
-
-/// Represents the expected number of arguments for an operation
-#[derive(Debug, Clone, PartialEq)]
-pub enum Arity {
-    /// Exactly n arguments required
-    Exact(usize),
-    /// At least n arguments required
-    AtLeast(usize),
-    /// Between min and max arguments (inclusive)
-    Range(usize, usize),
-    /// Any number of arguments (0 or more)
-    Any,
-}
-
-impl Arity {
-    /// Check if the given number of arguments is valid for this arity constraint
-    pub(crate) fn validate(&self, arg_count: usize) -> Result<(), Error> {
-        let valid = match self {
-            Arity::Exact(n) => arg_count == *n,
-            Arity::AtLeast(n) => arg_count >= *n,
-            Arity::Range(min, max) => arg_count >= *min && arg_count <= *max,
-            Arity::Any => true,
-        };
-
-        if valid {
-            Ok(())
-        } else {
-            Err(Error::ArityError {
-                expected: match self {
-                    Arity::Exact(n) | Arity::AtLeast(n) => *n,
-                    Arity::Range(min, _) => *min,
-                    Arity::Any => 0,
-                },
-                got: arg_count,
-                expression: None, // Builtin validation doesn't have expression context
-            })
-        }
-    }
-}
 
 /// Represents the implementation of a built-in expression (function or special form)
 #[derive(Clone)]
@@ -151,12 +113,13 @@ impl PartialEq for BuiltinOp {
 
 impl BuiltinOp {
     /// Check if this operation is a special form
-    #[cfg_attr(not(test), expect(dead_code))]
+    #[cfg(test)]
     pub(crate) fn is_special_form(&self) -> bool {
         matches!(self.op_kind, OpKind::SpecialForm(_))
     }
 
     /// Check if the given number of arguments is valid for this operation
+    #[cfg(any(feature = "scheme", feature = "jsonlogic"))]
     pub(crate) fn validate_arity(&self, arg_count: usize) -> Result<(), Error> {
         self.arity.validate(arg_count)
     }
@@ -557,12 +520,14 @@ static BUILTIN_OPS: LazyLock<Vec<BuiltinOp>> = LazyLock::new(|| {
 });
 
 /// Lazy static map from scheme_id to BuiltinOp (private - use find_builtin_op_by_scheme_id)
+#[cfg(any(feature = "scheme", feature = "jsonlogic", test))]
 static BUILTIN_SCHEME: LazyLock<HashMap<&'static str, &'static BuiltinOp>> = LazyLock::new(|| {
     let ops: &'static [BuiltinOp] = BUILTIN_OPS.as_slice();
     ops.iter().map(|op| (op.scheme_id, op)).collect()
 });
 
 /// Lazy static map from jsonlogic_id to BuiltinOp (private - use find_builtin_op_by_jsonlogic_id)
+#[cfg(any(feature = "jsonlogic", test))]
 static BUILTIN_JSONLOGIC: LazyLock<HashMap<&'static str, &'static BuiltinOp>> =
     LazyLock::new(|| {
         let ops: &'static [BuiltinOp] = BUILTIN_OPS.as_slice();
@@ -575,21 +540,25 @@ pub(crate) fn get_builtin_ops() -> &'static [BuiltinOp] {
 }
 
 /// Find a builtin operation by its Scheme identifier
+#[cfg(any(feature = "scheme", feature = "jsonlogic", test))]
 pub(crate) fn find_scheme_op(id: &str) -> Option<&'static BuiltinOp> {
     BUILTIN_SCHEME.get(id).copied()
 }
 
 /// Find a builtin operation by its JSONLogic identifier
+#[cfg(any(feature = "jsonlogic", test))]
 pub(crate) fn find_jsonlogic_op(id: &str) -> Option<&'static BuiltinOp> {
     BUILTIN_JSONLOGIC.get(id).copied()
 }
 
 /// Get the quote builtin operation - guaranteed to exist
+#[cfg(any(feature = "scheme", feature = "jsonlogic"))]
 pub(crate) fn get_quote_op() -> &'static BuiltinOp {
     find_scheme_op("quote").expect("quote builtin operation must be available")
 }
 
 /// Get the list builtin operation - guaranteed to exist
+#[cfg(feature = "jsonlogic")]
 pub(crate) fn get_list_op() -> &'static BuiltinOp {
     find_scheme_op("list").expect("list builtin operation must be available")
 }
