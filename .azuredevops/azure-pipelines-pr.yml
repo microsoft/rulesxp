@@ -21,13 +21,22 @@ steps:
       Write-Host "Repo: $env:BUILD_REPOSITORY_NAME"
 
       # Compose a concise build name for email subjects / UI
-      $status = if ($env:BUILD_REASON -eq 'PullRequest') { 'PR validation' } else { $env:BUILD_REASON }
-      $prId = if ($env:SYSTEM_PULLREQUEST_PULLREQUESTNUMBER) { $env:SYSTEM_PULLREQUEST_PULLREQUESTNUMBER } else { 'n/a' }
+      $prId = if ($env:SYSTEM_PULLREQUEST_PULLREQUESTNUMBER) { $env:SYSTEM_PULLREQUEST_PULLREQUESTNUMBER } else { 'none' }
+
+      # Start from the commit message, truncate, then sanitize for build number rules
       $commitMsg = $env:BUILD_SOURCEVERSIONMESSAGE
-      if (-not [string]::IsNullOrEmpty($commitMsg) -and $commitMsg.Length -gt 60) {
-        $commitMsg = $commitMsg.Substring(0,60) + '…'
+      if (-not [string]::IsNullOrEmpty($commitMsg)) {
+        if ($commitMsg.Length -gt 60) {
+          $commitMsg = $commitMsg.Substring(0,60)
+        }
+        # Replace characters not allowed in build numbers
+        $commitMsg = [regex]::Replace($commitMsg, '["\/:<>\\|?@*]', '_')
+        $commitMsg = $commitMsg.Trim()
+        if ($commitMsg.EndsWith('.')) {
+          $commitMsg = $commitMsg.TrimEnd('.')
+        }
       }
 
-      $buildName = "PR $prId - $status - $commitMsg"
+      $buildName = "PR $prId - $commitMsg"
       Write-Host "##vso[build.updatebuildnumber]$buildName"
     displayName: "Annotate build with PR metadata"
