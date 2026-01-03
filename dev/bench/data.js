@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765215953574,
+  "lastUpdate": 1767414161333,
   "repoUrl": "https://github.com/microsoft/rulesxp",
   "entries": {
     "RulesXP Benchmark": [
@@ -167,6 +167,90 @@ window.BENCHMARK_DATA = {
             "name": "Evaluation/Eval Scheme Factorial",
             "value": 142844,
             "range": "± 534",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "git@talagrand.org",
+            "name": "Eugene",
+            "username": "talagrand"
+          },
+          "distinct": true,
+          "id": "3b83127c38a3585749b6f56cf1d23b9dcfec7da9",
+          "message": "ci(deps): bump actions/upload-artifact from 5 to 6\n\nBumps [actions/upload-artifact](https://github.com/actions/upload-artifact) from 5 to 6.\n- [Release notes](https://github.com/actions/upload-artifact/releases)\n- [Commits](https://github.com/actions/upload-artifact/compare/v5...v6)\n\n---\nupdated-dependencies:\n- dependency-name: actions/upload-artifact\n  dependency-version: '6'\n  dependency-type: direct:production\n  update-type: version-update:semver-major\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+          "timestamp": "2026-01-02T20:19:55-08:00",
+          "tree_id": "f392784c39c5638da7c321f94eda5459fa1c56c3",
+          "url": "https://github.com/microsoft/rulesxp/commit/3b83127c38a3585749b6f56cf1d23b9dcfec7da9"
+        },
+        "date": 1767414160432,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "Parsing/Scheme Simple",
+            "value": 780,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Nested",
+            "value": 3552,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Factorial",
+            "value": 9486,
+            "range": "± 54",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Simple",
+            "value": 441,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Nested",
+            "value": 1914,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Simple",
+            "value": 1974,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Simple",
+            "value": 1919,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Nested",
+            "value": 2332,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Nested",
+            "value": 2236,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Factorial",
+            "value": 138801,
+            "range": "± 686",
             "unit": "ns/iter"
           }
         ]
