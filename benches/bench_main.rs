@@ -1,7 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rulesxp::{evaluator, jsonlogic, scheme};
+use std::hint::black_box;
 
 const SCHEME_SIMPLE: &str = "(+ 1 2)";
 const SCHEME_NESTED: &str = "(if (> (* 5 2) 8) (max 10 5 20) 0)";
