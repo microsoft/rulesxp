@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767414161333,
+  "lastUpdate": 1767414260487,
   "repoUrl": "https://github.com/microsoft/rulesxp",
   "entries": {
     "RulesXP Benchmark": [
@@ -251,6 +251,90 @@ window.BENCHMARK_DATA = {
             "name": "Evaluation/Eval Scheme Factorial",
             "value": 138801,
             "range": "± 686",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7032d79f17533bdc16e5b4c0f405fcf840bdcee8",
+          "message": "deps(deps): bump serde_json from 1.0.145 to 1.0.148 (#13)\n\nBumps [serde_json](https://github.com/serde-rs/json) from 1.0.145 to 1.0.148.\n- [Release notes](https://github.com/serde-rs/json/releases)\n- [Commits](https://github.com/serde-rs/json/compare/v1.0.145...v1.0.148)\n\n---\nupdated-dependencies:\n- dependency-name: serde_json\n  dependency-version: 1.0.148\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Eugene <git@talagrand.org>",
+          "timestamp": "2026-01-03T04:21:38Z",
+          "tree_id": "4b46ab52246830cd1e1d9096614287191ce1f6fc",
+          "url": "https://github.com/microsoft/rulesxp/commit/7032d79f17533bdc16e5b4c0f405fcf840bdcee8"
+        },
+        "date": 1767414260208,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "Parsing/Scheme Simple",
+            "value": 811,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Nested",
+            "value": 3610,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Factorial",
+            "value": 9634,
+            "range": "± 40",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Simple",
+            "value": 480,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Nested",
+            "value": 1969,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Simple",
+            "value": 2091,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Simple",
+            "value": 1989,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Nested",
+            "value": 2395,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Nested",
+            "value": 2352,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Factorial",
+            "value": 146217,
+            "range": "± 495",
             "unit": "ns/iter"
           }
         ]
