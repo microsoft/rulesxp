@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767414260487,
+  "lastUpdate": 1767415417629,
   "repoUrl": "https://github.com/microsoft/rulesxp",
   "entries": {
     "RulesXP Benchmark": [
@@ -335,6 +335,90 @@ window.BENCHMARK_DATA = {
             "name": "Evaluation/Eval Scheme Factorial",
             "value": 146217,
             "range": "± 495",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "git@talagrand.org",
+            "name": "Eugene",
+            "username": "talagrand"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fb24626ad0316abdac2d0fe10c592faeaf6317cc",
+          "message": "Merge pull request #14 from microsoft/dependabot/cargo/criterion-0.8.1\n\ndeps(deps): bump criterion from 0.5.1 to 0.8.1",
+          "timestamp": "2026-01-02T20:40:58-08:00",
+          "tree_id": "cacf14347984ce71b7c9cd64bd98f99b637c52ad",
+          "url": "https://github.com/microsoft/rulesxp/commit/fb24626ad0316abdac2d0fe10c592faeaf6317cc"
+        },
+        "date": 1767415417373,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "Parsing/Scheme Simple",
+            "value": 801,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Nested",
+            "value": 3614,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Factorial",
+            "value": 9573,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Simple",
+            "value": 452,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Nested",
+            "value": 1877,
+            "range": "± 41",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Simple",
+            "value": 2007,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Simple",
+            "value": 1920,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Nested",
+            "value": 2375,
+            "range": "± 94",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Nested",
+            "value": 2338,
+            "range": "± 112",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Factorial",
+            "value": 139956,
+            "range": "± 805",
             "unit": "ns/iter"
           }
         ]
