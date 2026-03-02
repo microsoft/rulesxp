@@ -1,26 +1,15 @@
 version: 2
 updates:
-  # Enable version updates for Cargo (main crate)
+  # Enable version updates for Cargo (main crate and fuzz crate)
   - package-ecosystem: "cargo"
-    directory: "/"
+    directories:
+      - "/"
+      - "/fuzz"
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
-    commit-message:
-      prefix: "deps"
-      include: "scope"
-
-  # Enable version updates for Cargo (fuzz crate)
-  - package-ecosystem: "cargo"
-    directory: "/fuzz"
-    schedule:
-      interval: "monthly"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-      - "fuzzing"
     commit-message:
       prefix: "deps"
       include: "scope"
