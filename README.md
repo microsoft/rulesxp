@@ -1,15 +1,20 @@
-# RulesXP
+# ![RulesXP](https://raw.githubusercontent.com/microsoft/rulesxp/main/docs/rulesxp-logo.svg) &ensp; [![CI]][actions] [![Fuzzing]][fuzz] [![Crates.io]][crates.io] [![Documentation]][docs.rs]
 
-[![CI](https://github.com/microsoft/rulesxp/workflows/CI/badge.svg)](https://github.com/microsoft/rulesxp/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/rulesxp.svg)](https://crates.io/crates/rulesxp)
-[![Documentation](https://docs.rs/rulesxp/badge.svg)](https://docs.rs/rulesxp)
-
-**Multi-Language Rules Expression Evaluator**
+## RulesXP: Multi-Language Rules Expression Evaluator
 
 RulesXP is a minimalistic expression evaluator that supports both JSONLogic and Scheme syntax with strict typing.
 It's designed for reliable rule evaluation with predictable behavior.
 
 **Note that this project is a work in progress and the API and feature set are expected to change**
+
+[CI]: https://github.com/microsoft/rulesxp/workflows/CI/badge.svg
+[actions]: https://github.com/microsoft/rulesxp/actions/workflows/ci.yml
+[Fuzzing]: https://github.com/microsoft/rulesxp/actions/workflows/fuzz.yml/badge.svg
+[fuzz]: https://github.com/microsoft/rulesxp/actions/workflows/fuzz.yml
+[Crates.io]: https://img.shields.io/crates/v/rulesxp.svg
+[crates.io]: https://crates.io/crates/rulesxp
+[Documentation]: https://docs.rs/rulesxp/badge.svg
+[docs.rs]: https://docs.rs/rulesxp
 
 ## Features
 
