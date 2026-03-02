@@ -19,7 +19,7 @@ jobs:
     # so tags in forks don't create upstream-style releases.
     if: github.event.repository.fork == false
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      tag_name: ${{ steps.tag_name.outputs.TAG_NAME }}
 
     steps:
     - name: Checkout code
@@ -40,15 +40,9 @@ jobs:
         echo "Version check passed: $CARGO_VERSION"
 
     - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.tag_name.outputs.TAG_NAME }}
-        release_name: Release ${{ steps.tag_name.outputs.TAG_NAME }}
-        draft: false
-        prerelease: false
+        GH_TOKEN: ${{ github.token }}
+      run: gh release create ${{ steps.tag_name.outputs.TAG_NAME }} --title "Release ${{ steps.tag_name.outputs.TAG_NAME }}" --generate-notes
 
   publish-crate:
     name: Publish to crates.io
@@ -126,11 +120,6 @@ jobs:
         tar -czf ${{ matrix.archive_name }} -C staging .
 
     - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.create-release.outputs.upload_url }}
-        asset_path: ./${{ matrix.archive_name }}
-        asset_name: ${{ matrix.archive_name }}
-        asset_content_type: application/octet-stream
+        GH_TOKEN: ${{ github.token }}
+      run: gh release upload ${{ needs.create-release.outputs.tag_name }} ./${{ matrix.archive_name }}
