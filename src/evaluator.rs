@@ -568,7 +568,7 @@ mod tests {
     use super::*;
     use crate::Error;
     use crate::ast::{nil, sym, val};
-    use crate::evaluator::{NumIter, ValueIter};
+    use crate::evaluator::{BoolIter, NumIter, StringIter, ValueIter};
     use crate::scheme::parse_scheme;
 
     /// Test result variants for comprehensive testing
@@ -733,15 +733,34 @@ mod tests {
             Ok(nums.sum::<i64>())
         }
 
+        fn string_length(s: &str) -> i64 {
+            s.len() as i64
+        }
+
+        fn all_true(mut bools: BoolIter<'_>) -> bool {
+            bools.all(|b| b)
+        }
+
+        fn join_strings(strings: StringIter<'_>) -> String {
+            strings.collect::<Vec<_>>().join(",")
+        }
+
         let mut env = create_global_env();
 
         // Fixed-arity and zero-arg builtins.
         env.register_builtin_operation::<(i64, i64)>("add2", add);
         env.register_builtin_operation::<()>("forty-two", forty_two);
         env.register_builtin_operation::<(i64, i64)>("safe-div", safe_div);
+        env.register_builtin_operation::<(&str,)>("str-len", string_length);
 
         // Iterator-based list and variadic builtins.
         env.register_builtin_operation::<(NumIter<'static>,)>("sum-list", sum_list);
+        env.register_builtin_operation::<(BoolIter<'static>,)>("all-true", all_true);
+        env.register_variadic_builtin_operation::<(StringIter<'static>,)>(
+            "join-strings",
+            Arity::AtLeast(0),
+            join_strings,
+        );
         env.register_variadic_builtin_operation::<(ValueIter<'static>,)>(
             "first-rest-count",
             Arity::AtLeast(1),
@@ -772,6 +791,7 @@ mod tests {
             // Fixed-arity and zero-arg builtins.
             ("(add2 7 5)", success(12)),
             ("(forty-two)", success(42)),
+            ("(forty-two 1)", ArityError), // 0-arg arity check should reject
             ("(safe-div 6 3)", success(2)),
             // Error case: division by zero surfaces as EvalError containing the message.
             ("(safe-div 1 0)", SpecificError("division by zero")),
@@ -784,12 +804,31 @@ mod tests {
             // Explicit arity checking for variadic builtin.
             ("(sum-all-min1 1 2 3)", success(6)),
             ("(sum-all-min1)", ArityError),
+            // &str, BoolIter, StringIter parameter types & validation in custom builtins.
+            ("(str-len \"hello\")", success(5)),
+            ("(str-len 42)", SpecificError("expected string")),
+            ("(str-len)", ArityError),
+            ("(all-true (list #t #t #t))", success(true)),
+            ("(all-true (list 1 2))", SpecificError("expected boolean")),
+            ("(join-strings \"a\" \"b\" \"c\")", success("a,b,c")),
+            ("(join-strings 1 2)", SpecificError("expected string")),
             // Dynamic higher-order use of a builtin comparison: pass `>` as a value.
             ("((lambda (op a b c) (op a b c)) > 9 6 2)", success(true)),
             ("((lambda (op a b c) (op a b c)) > 9 6 7)", success(false)),
         ];
 
         run_tests_in_specific_environment(&mut env, test_cases);
+    }
+
+    #[test]
+    fn test_get_all_bindings_with_parent() {
+        let mut parent = create_global_env();
+        parent.define("parent-var".into(), val(1));
+        let mut child = Environment::with_parent(parent);
+        child.define("child-var".into(), val(2));
+        let bindings = child.get_all_bindings();
+        assert!(bindings.iter().any(|(n, _)| n == "child-var"));
+        assert!(bindings.iter().any(|(n, _)| n == "parent-var"));
     }
 
     #[test]
@@ -1068,6 +1107,12 @@ mod tests {
             ("(set! x 42)", SpecificError("Unbound variable: set!")), // Unsupported special forms appear as unbound variables
             // Type errors
             ("(+ 1 \"hello\")", SpecificError("expected number")),
+            // TypeError has extra annotation inside lambda body
+            (
+                "((lambda (x) (+ x \"hello\")) 1)",
+                SpecificError("In lambda"),
+            ),
+            ("(1 2 3)", SpecificError("Cannot apply non-function")),
         ];
 
         run_comprehensive_tests(test_cases);

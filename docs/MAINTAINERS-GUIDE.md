@@ -176,3 +176,52 @@ Tokens expire or may need rotation; here is how to refresh it:
 > **Tip:** Set a calendar reminder to rotate the token before it expires. crates.io tokens
 > currently have configurable expiration — choose a duration that balances security with
 > convenience.
+
+---
+
+## Code Coverage (Codecov)
+
+The CI workflow generates code coverage using
+[`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and uploads the results to
+[Codecov](https://codecov.io/gh/microsoft/rulesxp). A coverage badge is displayed in the README.
+
+### How it works
+
+The `coverage` job in [ci.yml](../.github/workflows/ci.yml):
+
+1. Runs `cargo llvm-cov --all-features --workspace` to produce both an HTML report (uploaded as a
+   build artifact) and an LCOV file.
+2. Uploads the LCOV file to Codecov using
+   [`codecov/codecov-action@v5`](https://github.com/codecov/codecov-action).
+
+### Setup / Onboarding
+
+If the Codecov integration ever needs to be re-configured (e.g., after a repo transfer):
+
+1. Sign in to [codecov.io](https://codecov.io) with a GitHub account that has admin access to the
+   repository.
+2. Enable the `microsoft/rulesxp` repository in the Codecov dashboard.
+3. Copy the **upload token** from the Codecov repository settings page.
+4. Add (or update) the `CODECOV_TOKEN` repository secret in GitHub:
+   **Settings → Secrets and variables → Actions → `CODECOV_TOKEN`**.
+
+### Refreshing the Codecov Token
+
+Codecov upload tokens do not expire by default, but if the token is revoked or rotated in the
+Codecov dashboard:
+
+1. Go to the [Codecov settings for rulesxp](https://codecov.io/gh/microsoft/rulesxp/settings).
+2. Copy the new upload token.
+3. Update the `CODECOV_TOKEN` secret in the
+   [repository settings](https://github.com/microsoft/rulesxp/settings/secrets/actions).
+
+### Viewing Coverage
+
+- **Codecov dashboard:** <https://codecov.io/gh/microsoft/rulesxp>
+- **HTML artifact:** Download the `coverage-report` artifact from any CI run on the
+  [Actions page](https://github.com/microsoft/rulesxp/actions/workflows/ci.yml).
+- **Locally:**
+
+  ```sh
+  cargo llvm-cov --all-features --workspace --html --open
+  ```
