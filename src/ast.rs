@@ -415,6 +415,11 @@ mod helper_function_tests {
                     Value::Bool(true),
                 ]),
             ),
+            // From<&[T]> slice conversion
+            (
+                Value::from(&[1i64, 2, 3][..]),
+                Value::List(vec![Value::Number(1), Value::Number(2), Value::Number(3)]),
+            ),
         ];
 
         run_helper_function_tests(test_cases);
@@ -440,5 +445,76 @@ mod helper_function_tests {
         assert_ne!(unspec, unspec);
         assert_ne!(unspec, Value::Unspecified);
         assert_ne!(unspec, val(42));
+    }
+
+    #[test]
+    #[cfg(feature = "scheme")]
+    fn test_debug_display_and_equality() {
+        use crate::evaluator::{create_global_env, eval};
+        use crate::scheme::parse_scheme;
+
+        let mut env = create_global_env();
+        eval(&parse_scheme("(define f +)").unwrap(), &mut env).unwrap();
+        let builtin_fn = eval(&parse_scheme("f").unwrap(), &mut env).unwrap();
+        let func = eval(&parse_scheme("(lambda (x) (+ x 1))").unwrap(), &mut env).unwrap();
+        let precompiled = parse_scheme("(+ 1 2)").unwrap();
+
+        let list_val = val([1, 2, 3]);
+
+        // Debug: (value, expected_substring)
+        let debug_cases: Vec<(&Value, &str)> = vec![
+            (&list_val, "List("),
+            (&precompiled, "PrecompiledOp"),
+            (&builtin_fn, "BuiltinFunction"),
+            (&func, "Function"),
+            (&Value::Unspecified, "Unspecified"),
+        ];
+        for (value, expected) in &debug_cases {
+            assert!(
+                format!("{value:?}").contains(expected),
+                "Debug of {value:?} should contain '{expected}'"
+            );
+        }
+
+        // Display: (value, expected_substring)
+        let display_cases: Vec<(&Value, &str)> = vec![
+            (&builtin_fn, "#<builtin-function:"),
+            (&func, "#<function>"),
+            (&Value::Unspecified, "#<unspecified>"),
+        ];
+        for (value, expected) in &display_cases {
+            assert!(
+                format!("{value}").contains(expected),
+                "Display of {value} should contain '{expected}'"
+            );
+        }
+
+        // PartialEq: one test per uncovered match arm
+        let mut env2 = create_global_env();
+        eval(&parse_scheme("(define f2 +)").unwrap(), &mut env2).unwrap();
+        assert!(builtin_fn == eval(&parse_scheme("f2").unwrap(), &mut env2).unwrap());
+
+        let func_b = eval(&parse_scheme("(lambda (x) (+ x 1))").unwrap(), &mut env).unwrap();
+        assert!(func == func_b);
+
+        assert!(precompiled == parse_scheme("(+ 1 2)").unwrap());
+
+        assert!(builtin_fn != func); // cross-variant catch-all arm
+
+        // Error Display: (error, expected_substring)
+        let error_cases: Vec<(crate::Error, &str)> = vec![
+            (
+                crate::Error::arity_error_with_expr(2, 3, "x".into()),
+                "Arity error",
+            ),
+            (crate::Error::ParseError("x".into()), "Parse error"),
+            (crate::Error::arity_error(2, 3), "Arity error"),
+        ];
+        for (error, expected) in &error_cases {
+            assert!(
+                format!("{error}").contains(expected),
+                "Error '{error}' should contain '{expected}'"
+            );
+        }
     }
 }

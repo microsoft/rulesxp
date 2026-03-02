@@ -483,6 +483,7 @@ mod tests {
             ("#xff", success(255)),
             ("#x0", success(0)),
             ("#x12345", success(74565)),
+            ("#xFFFFFFFFFFFFFFFF", Error), // Hex overflow
             // Edge cases - large integer literals
             ("9223372036854775807", success(i64::MAX)),
             ("-9223372036854775808", success(i64::MIN)),

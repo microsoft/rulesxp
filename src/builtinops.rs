@@ -662,6 +662,18 @@ mod tests {
                 .scheme_id,
             "="
         );
+
+        // === Cover BuiltinOp/OpKind Debug And PartialEq ===
+        let add_ref = find_scheme_op("+").unwrap();
+        assert!(format!("{:?}", add_ref.op_kind).contains("Function"));
+        let if_ref = find_scheme_op("if").unwrap();
+        assert!(format!("{:?}", if_ref.op_kind).contains("SpecialForm"));
+        assert!(
+            (add_ref.op_kind == add_ref.op_kind)
+                && (if_ref.op_kind == if_ref.op_kind)
+                && (add_ref.op_kind != if_ref.op_kind)
+                && (*add_ref == add_ref.clone())
+        );
     }
 
     /// Macro to create test cases, invoking builtins via the registry.

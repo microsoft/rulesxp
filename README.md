@@ -1,4 +1,4 @@
-# ![RulesXP](https://raw.githubusercontent.com/microsoft/rulesxp/main/docs/rulesxp-logo.svg) &ensp; [![CI]][actions] [![Fuzzing]][fuzz] [![Crates.io]][crates.io] [![Documentation]][docs.rs]
+# ![RulesXP](https://raw.githubusercontent.com/microsoft/rulesxp/main/docs/rulesxp-logo.svg) &ensp; [![CI]][actions] [![Fuzzing]][fuzz] [![codecov]][codecov-link] [![Crates.io]][crates.io] [![Documentation]][docs.rs]
 
 ## RulesXP: Multi-Language Rules Expression Evaluator
 
@@ -11,6 +11,8 @@ It's designed for reliable rule evaluation with predictable behavior.
 [actions]: https://github.com/microsoft/rulesxp/actions/workflows/ci.yml
 [Fuzzing]: https://github.com/microsoft/rulesxp/actions/workflows/fuzz.yml/badge.svg
 [fuzz]: https://github.com/microsoft/rulesxp/actions/workflows/fuzz.yml
+[codecov]: https://codecov.io/gh/microsoft/rulesxp/graph/badge.svg
+[codecov-link]: https://codecov.io/gh/microsoft/rulesxp
 [Crates.io]: https://img.shields.io/crates/v/rulesxp.svg
 [crates.io]: https://crates.io/crates/rulesxp
 [Documentation]: https://docs.rs/rulesxp/badge.svg

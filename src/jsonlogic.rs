@@ -706,6 +706,20 @@ mod tests {
                 r#"["lambda", ["x"], ["*", "x", "x"]]"#,
                 Identical(r#"(list "lambda" (list "x") (list "*" "x" "x"))"#),
             ),
+            // Quote with non-array operand (normalizes to array form on roundtrip)
+            (
+                r#"{"scheme-quote": 42}"#,
+                SemanticallyEquivalent("(quote 42)"),
+            ),
+            // Quote with wrong number of array operands
+            (
+                r#"{"scheme-quote": [1, 2]}"#,
+                SpecificError("quote requires one operand"),
+            ),
+            // Float number that isn't an integer
+            (r#"3.14"#, SpecificError("not integer")),
+            // Large number overflow
+            (r#"99999999999999999999"#, SpecificError("too large")),
         ];
 
         run_data_driven_tests(&test_cases);
@@ -764,6 +778,35 @@ mod tests {
             objects_result.is_ok(),
             "Objects just under depth limit should parse successfully"
         );
+    }
+
+    #[test]
+    fn test_ast_to_jsonlogic_error_paths() {
+        let mut env = create_global_env();
+        eval(&parse_scheme("(define f +)").unwrap(), &mut env).unwrap();
+
+        // Values that cannot be converted to JSONLogic
+        let unconvertible: Vec<(&str, Value)> = vec![
+            (
+                "BuiltinFunction",
+                eval(&parse_scheme("f").unwrap(), &mut env).unwrap(),
+            ),
+            (
+                "Function",
+                eval(&parse_scheme("(lambda (x) (+ x 1))").unwrap(), &mut env).unwrap(),
+            ),
+            ("Unspecified", Value::Unspecified),
+        ];
+        for (label, val) in &unconvertible {
+            assert!(
+                ast_to_jsonlogic(val).is_err(),
+                "{label} should fail conversion"
+            );
+        }
+
+        // Non-symbol list converts to JSON array
+        let list_val = Value::List(vec![Value::Number(1), Value::Number(2)]);
+        assert_eq!(ast_to_jsonlogic(&list_val).unwrap(), "[1,2]");
     }
 
     /// Helper function to test AST equivalence and roundtrip (shared by Identical and IdenticalWithEvalError)
