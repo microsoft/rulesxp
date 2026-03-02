@@ -18,6 +18,9 @@ jobs:
   fuzz:
     name: Fuzz Testing
     runs-on: ubuntu-latest
+    permissions:
+      contents: read    # to checkout the repo
+      issues: write     # to create/comment on issues
     # Only run fuzzing for non-fork repositories to save folks CI credits.
     if: github.event.repository.fork == false
     strategy:
@@ -37,6 +40,18 @@ jobs:
 
     - name: Cache dependencies
       uses: Swatinem/rust-cache@v2
+
+    # Corpus caching:
+    # - Save key uses run_id so each run creates a new cache (caches are immutable)
+    # - Restore key uses prefix match to find the most recent cache from any prior run
+    # - Daily runs ensure we always have a recent corpus to build on
+    - name: Restore corpus cache
+      uses: actions/cache@v4
+      with:
+        path: fuzz/corpus/${{ matrix.target }}
+        key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+        restore-keys: |
+          fuzz-corpus-${{ matrix.target }}-
 
     - name: Run fuzzer
       run: |
