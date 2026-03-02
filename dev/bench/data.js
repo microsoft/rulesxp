@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1772484037486,
+  "lastUpdate": 1772484183113,
   "repoUrl": "https://github.com/microsoft/rulesxp",
   "entries": {
     "RulesXP Benchmark": [
@@ -587,6 +587,90 @@ window.BENCHMARK_DATA = {
             "name": "Evaluation/Eval Scheme Factorial",
             "value": 145066,
             "range": "± 5750",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "git@talagrand.org",
+            "name": "Eugene",
+            "username": "talagrand"
+          },
+          "distinct": true,
+          "id": "67ef053514e08abe615544be195c4a9644b2f6a8",
+          "message": "deps(deps): bump libfuzzer-sys from 0.4.10 to 0.4.12 in /fuzz\n\nBumps [libfuzzer-sys](https://github.com/rust-fuzz/libfuzzer) from 0.4.10 to 0.4.12.\n- [Changelog](https://github.com/rust-fuzz/libfuzzer/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/rust-fuzz/libfuzzer/commits)\n\n---\nupdated-dependencies:\n- dependency-name: libfuzzer-sys\n  dependency-version: 0.4.12\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+          "timestamp": "2026-03-02T12:40:06-08:00",
+          "tree_id": "33c48e69f97c04404f959359460b2652db443b6b",
+          "url": "https://github.com/microsoft/rulesxp/commit/67ef053514e08abe615544be195c4a9644b2f6a8"
+        },
+        "date": 1772484182773,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "Parsing/Scheme Simple",
+            "value": 785,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Nested",
+            "value": 3610,
+            "range": "± 53",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Factorial",
+            "value": 9656,
+            "range": "± 180",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Simple",
+            "value": 453,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Nested",
+            "value": 1835,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Simple",
+            "value": 2016,
+            "range": "± 67",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Simple",
+            "value": 1947,
+            "range": "± 66",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Nested",
+            "value": 2309,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Nested",
+            "value": 2281,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Factorial",
+            "value": 144292,
+            "range": "± 1226",
             "unit": "ns/iter"
           }
         ]
