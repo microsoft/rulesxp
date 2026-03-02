@@ -8,34 +8,52 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  MSRV: '1.90'
 
 jobs:
   test:
     name: Test Suite
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        rust-version: ['1.90', 'stable']
-        features:
-          - ''
-          - 'scheme'
-          - 'jsonlogic'
-          - 'scheme,jsonlogic'
+        rust-version: ['msrv', 'stable']
+        cargo-args:
+          - '--no-default-features'
+          - '--no-default-features --features scheme'
+          - '--no-default-features --features jsonlogic'
+          - '--no-default-features --features scheme,jsonlogic'
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
 
+    - name: Resolve toolchain
+      id: resolve
+      shell: bash
+      run: |
+        rust="${{ matrix.rust-version }}"
+        [[ "$rust" == "msrv" ]] && rust="$MSRV"
+        echo "toolchain=$rust" >> "$GITHUB_OUTPUT"
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: ${{ matrix.rust-version }}
+        toolchain: ${{ steps.resolve.outputs.toolchain }}
+
+    - name: Install clippy (stable only)
+      if: matrix.rust-version == 'stable'
+      run: rustup component add clippy
 
     - name: Cache dependencies
       uses: Swatinem/rust-cache@v2
 
     - name: Run tests
-      run: cargo test --features="${{ matrix.features }}" --verbose
+      run: cargo test --all-targets ${{ matrix.cargo-args }} --verbose
+
+    - name: Run clippy
+      if: matrix.rust-version == 'stable'
+      run: cargo clippy --all-targets ${{ matrix.cargo-args }} -- -D warnings
 
     - name: Run doc tests (all features)
       run: cargo test --doc --all-features
@@ -69,8 +87,8 @@ jobs:
         path: coverage-html/
         retention-days: 30
 
-  lint:
-    name: Linting
+  fmt:
+    name: Formatting
     runs-on: ubuntu-latest
 
     steps:
@@ -80,16 +98,13 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
-        components: rustfmt, clippy
+        components: rustfmt
 
     - name: Cache dependencies
       uses: Swatinem/rust-cache@v2
 
     - name: Check formatting
       run: cargo fmt --all -- --check
-
-    - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
 
   docs:
     name: Documentation
@@ -142,7 +157,31 @@ jobs:
       uses: actions/checkout@v6
 
     - name: Install cargo-audit
-      run: cargo install cargo-audit
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-audit
 
     - name: Run security audit
       run: cargo audit
+
+  minimal-versions:
+    name: Minimal Versions
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Install Rust nightly
+      uses: dtolnay/rust-toolchain@nightly
+
+    - name: Install Rust stable
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install cargo-hack and cargo-minimal-versions
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-hack,cargo-minimal-versions
+
+    - name: Check minimal versions
+      run: cargo +nightly minimal-versions check --direct --all-features
