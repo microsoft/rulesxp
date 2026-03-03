@@ -104,6 +104,47 @@ migration steps may be needed.
 
 ---
 
+## Commit Conventions
+
+This project uses [Conventional Commits](https://www.conventionalcommits.org/) with the
+[Angular type extensions](https://github.com/angular/angular/blob/main/contributing-docs/commit-message-format.md).
+Each commit message should have the form: `<type>(<scope>): <short summary>`.
+The scope is optional but encouraged when it adds clarity.
+
+**Types:**
+
+| Type | Purpose |
+|------|---------|
+| `feat` | New feature (user-visible) |
+| `fix` | Bug fix |
+| `docs` | Documentation only |
+| `style` | Formatting, whitespace (no logic change) |
+| `refactor` | Code restructuring (no feature or fix) |
+| `perf` | Performance improvement |
+| `test` | Adding or updating tests |
+| `build` | Build system or dependencies |
+| `ci` | CI/CD configuration |
+| `chore` | Maintenance (tooling, config, lint settings) |
+
+Append `!` after the type/scope for breaking changes: `refactor!: ...` or `feat(eval)!: ...`.
+(don't forget this requires a semver version bump)
+
+Examples of scopes used in this project:
+
+| Scope | When to use |
+|-------|-------------|
+| `deps` | Dependency updates (`build(deps)`, `ci(deps)`) |
+| `fuzz` | Fuzzing infrastructure |
+| `lint` | Clippy / lint configuration |
+| `coverage` | Code coverage tooling |
+
+Scopes are free-form — add new ones when they improve clarity (e.g., `feat(eval)`, `fix(scheme)`).
+
+Only `feat` and `fix` are required by the spec; the rest are Angular conventions widely adopted in
+practice. Use lowercase types, keep the summary concise and imperative ("add X", not "added X").
+
+---
+
 ## Publishing a New Version to crates.io
 
 The crate is published automatically by the [release workflow](../.github/workflows/release.yml)
