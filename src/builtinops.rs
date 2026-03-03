@@ -564,7 +564,6 @@ pub(crate) fn get_list_op() -> &'static BuiltinOp {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)] // test code OK
 mod tests {
     use super::*;
     use crate::ast::{nil, val};

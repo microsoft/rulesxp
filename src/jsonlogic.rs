@@ -360,8 +360,8 @@ fn ast_to_json_value_with_context(
     }
 }
 
-#[cfg(all(test, feature = "scheme"))]
-#[expect(clippy::unwrap_used)] // test code OK
+#[cfg(test)]
+#[cfg(feature = "scheme")]
 mod tests {
     use core::panic;
 
