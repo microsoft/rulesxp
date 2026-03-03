@@ -1,7 +1,6 @@
 // serde-json needs this set to be able to parse the huge JSONLogic official test list
 #![recursion_limit = "1024"]
 #![cfg(feature = "jsonlogic")]
-#![expect(clippy::unwrap_used)] // test code OK
 
 use rulesxp::evaluator;
 use rulesxp::jsonlogic::{ast_to_jsonlogic, parse_jsonlogic};

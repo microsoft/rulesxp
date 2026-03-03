@@ -339,7 +339,6 @@ fn validate_arity_in_ast(value: &Value) -> Result<(), Error> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)] // test code OK
 mod tests {
     use super::*;
     use crate::ast::{nil, sym, val};
