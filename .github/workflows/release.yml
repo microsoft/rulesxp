@@ -29,6 +29,14 @@ jobs:
       id: tag_name
       run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
+    - name: Verify tag is on main
+      run: |
+        git fetch origin main
+        if ! git merge-base --is-ancestor $GITHUB_SHA origin/main; then
+          echo "Error: Tag must point to a commit on the main branch"
+          exit 1
+        fi
+
     - name: Verify version matches tag
       run: |
         TAG_VERSION=${GITHUB_REF#refs/tags/v}
@@ -50,6 +58,9 @@ jobs:
     # crates.io publishing is only meaningful for non-fork roots
     if: github.event.repository.fork == false
     needs: create-release
+    environment: crates-io
+    permissions:
+      id-token: write  # Required for OIDC trusted publishing
 
     steps:
     - name: Checkout code
@@ -61,8 +72,14 @@ jobs:
     - name: Cache dependencies
       uses: Swatinem/rust-cache@v2
 
+    - name: Authenticate with crates.io
+      uses: rust-lang/crates-io-auth-action@v1
+      id: auth
+
     - name: Publish to crates.io
-      run: cargo publish --all-features --token ${{ secrets.CRATES_IO_TOKEN }}
+      run: cargo publish --all-features
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   build-binaries:
     name: Build Release Binaries
