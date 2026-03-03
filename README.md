@@ -256,6 +256,10 @@ and builtin errors are surfaced directly as `Error` values.
 - [ ] Stabilized Rust API
 - [ ] ABI for FFI from C++/C#
 
+## Minimum supported Rust version
+
+Rust 1.90.
+
 ## Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a
