@@ -110,6 +110,11 @@ The crate is published automatically by the [release workflow](../.github/workfl
 when a version tag is pushed. The workflow verifies that the tag matches the version in
 `Cargo.toml`, publishes to crates.io, creates a GitHub Release, and uploads platform binaries.
 
+Only members of the [FIT: Update Tools](https://github.com/orgs/microsoft/teams/fit-update-tools)
+team can create `v*` tags (enforced by a
+[tag ruleset](https://github.com/microsoft/rulesxp/settings/rules)), so publishing is limited to
+this group.
+
 ### Step-by-step
 
 1. **Decide the new version number.** Follow
@@ -147,35 +152,47 @@ when a version tag is pushed. The workflow verifies that the tag matches the ver
    git push origin v0.4.0
    ```
 
+   > **Note:** A [tag ruleset](https://github.com/microsoft/rulesxp/settings/rules) restricts
+   > creation and deletion of `v*` tags to members of the **FIT: Update Tools** team. If you get a
+   > permission error when pushing a tag, verify your team membership.
+
    The release workflow will:
    - Verify the tag version matches `Cargo.toml`.
-   - Run `cargo publish --all-features --token $CRATES_IO_TOKEN`.
+   - Publish to crates.io via OIDC trusted publishing (no token required).
    - Create a GitHub Release with the tag.
    - Build and attach platform binaries (Linux x64, Windows x64, macOS ARM64).
 
 5. **Verify** the release on [crates.io/crates/rulesxp](https://crates.io/crates/rulesxp) and
    the [GitHub Releases](https://github.com/microsoft/rulesxp/releases) page.
 
-### Refreshing the crates.io Token
+### Trusted Publishing (OIDC)
 
-The release workflow authenticates to crates.io using the `CRATES_IO_TOKEN` repository secret.
-Tokens expire or may need rotation; here is how to refresh it:
+The release workflow authenticates to crates.io using
+[trusted publishing](https://crates.io/docs/trusted-publishing) — an
+OIDC-based mechanism where crates.io trusts identity assertions from GitHub Actions. No API tokens
+or repository secrets are needed.
 
-1. **Generate a new token** at <https://crates.io/settings/tokens>.
-   - Give it a descriptive name (e.g., `rulesxp-github-actions`).
-   - Scope it to `publish-update` for the `rulesxp` crate (if scoped tokens are available).
+**How it works:** When the `publish-crate` job runs, GitHub Actions issues a short-lived JWT signed
+by GitHub's OIDC provider. `cargo publish` sends this JWT to crates.io, which verifies the
+signature and checks that the token's claims (repository, workflow, environment) match the trusted
+publisher configuration on file for the crate. If everything matches, the publish is allowed.
 
-2. **Update the repository secret:**
-   - Go to **Settings → Secrets and variables → Actions** in the
-     [rulesxp repository](https://github.com/microsoft/rulesxp/settings/secrets/actions).
-   - Edit the `CRATES_IO_TOKEN` secret and paste the new token value.
+**Setup / reconfiguration:**
 
-3. **Test** by triggering a release (or re-running a previous release workflow) to confirm the
-   new token works.
+If the trusted publisher ever needs to be re-configured (e.g., after a repo transfer or workflow
+rename):
 
-> **Tip:** Set a calendar reminder to rotate the token before it expires. crates.io tokens
-> currently have configurable expiration — choose a duration that balances security with
-> convenience.
+1. Sign in to [crates.io](https://crates.io) as a crate owner.
+2. Go to the [rulesxp crate settings](https://crates.io/crates/rulesxp/settings).
+3. Under **Trusted Publishers**, add or update the GitHub configuration:
+   - **Repository owner:** `microsoft`
+   - **Repository name:** `rulesxp`
+   - **Workflow filename:** `release.yml`
+   - **Environment:** `crates-io`
+4. On the GitHub side, ensure the `crates-io`
+   [deployment environment](https://github.com/microsoft/rulesxp/settings/environments) exists.
+   Optionally add protection rules (e.g., required reviewers) for an extra approval gate before
+   publishing.
 
 ---
 
