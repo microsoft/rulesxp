@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775060449623,
+  "lastUpdate": 1775062023298,
   "repoUrl": "https://github.com/microsoft/rulesxp",
   "entries": {
     "RulesXP Benchmark": [
@@ -1091,6 +1091,90 @@ window.BENCHMARK_DATA = {
             "name": "Evaluation/Eval Scheme Factorial",
             "value": 140202,
             "range": "± 479",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "git@talagrand.org",
+            "name": "Eugene",
+            "username": "talagrand"
+          },
+          "distinct": true,
+          "id": "846c2218c8a9649c1cc48816887c967233e28381",
+          "message": "deps(deps): bump rustyline from 17.0.2 to 18.0.0\n\nBumps [rustyline](https://github.com/kkawakam/rustyline) from 17.0.2 to 18.0.0.\n- [Release notes](https://github.com/kkawakam/rustyline/releases)\n- [Changelog](https://github.com/kkawakam/rustyline/blob/master/History.md)\n- [Commits](https://github.com/kkawakam/rustyline/compare/v17.0.2...v18.0.0)\n\n---\nupdated-dependencies:\n- dependency-name: rustyline\n  dependency-version: 18.0.0\n  dependency-type: direct:production\n  update-type: version-update:semver-major\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+          "timestamp": "2026-04-01T09:35:01-07:00",
+          "tree_id": "d1a53f9766a68946d0c749f2361f23b460fb75d5",
+          "url": "https://github.com/microsoft/rulesxp/commit/846c2218c8a9649c1cc48816887c967233e28381"
+        },
+        "date": 1775062022979,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "Parsing/Scheme Simple",
+            "value": 819,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Nested",
+            "value": 3661,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Factorial",
+            "value": 9733,
+            "range": "± 96",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Simple",
+            "value": 485,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Nested",
+            "value": 1876,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Simple",
+            "value": 2039,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Simple",
+            "value": 1985,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Nested",
+            "value": 2441,
+            "range": "± 80",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Nested",
+            "value": 2368,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Factorial",
+            "value": 140157,
+            "range": "± 419",
             "unit": "ns/iter"
           }
         ]
