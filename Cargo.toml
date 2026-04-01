@@ -28,7 +28,7 @@ nom = "8.0"
 serde_json = { version = "1.0.25", optional = true }
 
 [dev-dependencies]
-rustyline = "17.0"
+rustyline = "18.0"
 criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]
