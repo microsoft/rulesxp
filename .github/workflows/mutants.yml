@@ -1,0 +1,139 @@
+name: Mutation Testing
+
+on:
+  pull_request:
+    paths:
+      - ".cargo/*.toml"
+      - ".github/workflows/mutants.yml"
+      - "Cargo.*"
+      - "src/**"
+      - "tests/**"
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  mutants:
+    name: Mutation Testing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - name: Relative diff
+        run: |
+          git branch -av
+          git diff origin/${{ github.base_ref }}.. | tee git.diff
+
+      - name: Run cargo-mutants
+        run: cargo mutants --no-shuffle --all-features --in-diff git.diff --in-place
+        continue-on-error: true
+
+      - name: Check mutants report
+        id: report
+        run: |
+          if [ -f mutants.out/outcomes.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment on PR
+        if: steps.report.outputs.exists == 'true' && (github.event.pull_request.head.repo.full_name == github.repository)
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('mutants.out/outcomes.json', 'utf8'));
+
+            const counts = {
+              caught: Number(report.caught ?? 0),
+              missed: Number(report.missed ?? 0),
+              timeout: Number(report.timeout ?? 0),
+              unviable: Number(report.unviable ?? 0),
+            };
+
+            const missed = (report.outcomes ?? [])
+              .filter(o => o.summary === 'MissedMutant' && o.scenario?.Mutant)
+              .map(o => {
+                const mutant = o.scenario.Mutant;
+                const functionName = mutant.function?.function_name ?? mutant.name;
+                const replacement = mutant.replacement ?? 'unknown replacement';
+                return `${functionName}: ${replacement}`;
+              });
+
+            const totalMutants = Number(report.total_mutants ?? 0);
+            const testable = counts.caught + counts.missed;
+            const score = testable > 0 ? (counts.caught / testable * 100).toFixed(1) : 'N/A';
+
+            let body = '## 🧬 Mutation Testing Results\n\n';
+            body += 'Scope: PR diff (`--in-diff`)\n\n';
+            body += '| Metric | Count |\n|--------|-------|\n';
+            body += `| Caught | ${counts.caught} |\n`;
+            body += `| Missed | ${counts.missed} |\n`;
+            body += `| Timeout | ${counts.timeout} |\n`;
+            body += `| Unviable | ${counts.unviable} |\n`;
+            body += `| **Mutation Score** | **${score}%** |\n\n`;
+
+            if (totalMutants === 0) {
+              body += 'No mutants were generated for the PR diff. This is expected for test-only or non-Rust changes.\n';
+            } else if (missed.length > 0) {
+              body += '<details><summary>Missed mutants (test gaps)</summary>\n\n```\n';
+              body += missed.join('\n');
+              body += '\n```\n\n</details>\n';
+            } else {
+              body += 'All mutants in the PR diff were caught by tests.\n';
+            }
+
+            const marker = '## 🧬 Mutation Testing Results';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: No report notice
+        if: steps.report.outputs.exists == 'false'
+        run: echo "cargo-mutants did not produce mutants.out/outcomes.json; skipping PR comment and artifact upload."
+
+      - name: Upload mutants report
+        if: steps.report.outputs.exists == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-report
+          path: mutants.out/
+          retention-days: 14

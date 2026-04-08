@@ -1089,11 +1089,18 @@ mod tests {
             ("(+ 1 (car \"not-a-list\"))", Error),
             ("(if (not 42) 1 2)", Error),
             // Test lambda parameter errors
-            ("(lambda (x x) x)", Error),           // Duplicate params
-            ("(lambda \"not-a-list\" 42)", Error), // Invalid params
+            ("(lambda (x x) x)", Error), // Duplicate params
+            (
+                "(lambda \"not-a-list\" 42)",
+                SpecificError("must be a list"),
+            ), // Invalid params
+            ("(lambda 42 x)", SpecificError("must be a list")), // Non-list params
             // Test define errors
-            ("(define 123 42)", Error),            // Invalid var name
-            ("(define \"not-symbol\" 42)", Error), // Invalid var name
+            ("(define 123 42)", SpecificError("define requires a symbol")),
+            (
+                "(define \"not-symbol\" 42)",
+                SpecificError("define requires a symbol"),
+            ),
             // === ERROR CASES ===
             // Unbound variables
             (
