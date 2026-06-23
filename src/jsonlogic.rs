@@ -840,17 +840,14 @@ mod tests {
                     // Test evaluation of AST as well
                     match eval(&jsonlogic_ast, &mut create_global_env()) {
                         Ok(_) => {} // Good
-                        Err(e) => panic!("Evaluation failed for {}: {:?}", jsonlogic, e),
+                        Err(e) => panic!("Evaluation failed for {jsonlogic}: {e:?}"),
                     }
                 }
                 (Ok(jsonlogic_ast), IdenticalWithEvalError(expected_scheme)) => {
                     test_ast_equivalence_and_roundtrip(jsonlogic, &jsonlogic_ast, expected_scheme);
                     // Verify that evaluation actually fails as expected
                     if let Ok(result) = eval(&jsonlogic_ast, &mut create_global_env()) {
-                        panic!(
-                            "Expected evaluation to fail for {}, but got: {}",
-                            jsonlogic, result
-                        )
+                        panic!("Expected evaluation to fail for {jsonlogic}, but got: {result}")
                     }
                     // Expected failure
                 }
@@ -885,15 +882,11 @@ mod tests {
                 }
                 (Ok(_), SpecificError(expected_error_text)) => {
                     panic!(
-                        "Expected error containing '{}' for JSONLogic '{}', but parsing succeeded",
-                        expected_error_text, jsonlogic
+                        "Expected error containing '{expected_error_text}' for JSONLogic '{jsonlogic}', but parsing succeeded"
                     );
                 }
                 (_, _) => {
-                    panic!(
-                        "Test failed for JSONLogic: {} Expected: {:?}",
-                        jsonlogic, expected_result
-                    );
+                    panic!("Test failed for JSONLogic: {jsonlogic} Expected: {expected_result:?}");
                 }
             }
         }
