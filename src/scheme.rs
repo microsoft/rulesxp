@@ -695,6 +695,8 @@ mod tests {
             ("(not #f)", precompiled_op("not", vec![val(false)])),
             // Test nested arity errors are also caught
             ("(list (not) 42)", SpecificError("ArityError")),
+            // Arity error nested inside unprecompiled list (unknown-fn isn't a builtin, so outer remains Value::List)
+            ("(unknown-fn (if #t 1))", SpecificError("ArityError")),
             // ===== PARSE-TIME SYNTAX ERRORS =====
             // Unclosed parentheses - should contain parse error information
             ("(+ 1 (- 2", SpecificError("ParseError")),
@@ -737,6 +739,12 @@ mod tests {
             ")".repeat(MAX_PARSE_DEPTH)
         );
         let deep_quotes_at_limit = format!("{}a", "'".repeat(MAX_PARSE_DEPTH));
+        // Longhand (quote ...) nesting exercises the depth tracking in parse_list's quote path
+        let deep_longhand_quote_at_limit = format!(
+            "{}a{}",
+            "(quote ".repeat(MAX_PARSE_DEPTH),
+            ")".repeat(MAX_PARSE_DEPTH)
+        );
 
         let depth_test_cases = vec![
             // At/over limit should fail at parse time with specific error
@@ -746,6 +754,11 @@ mod tests {
             ),
             (
                 deep_quotes_at_limit.as_str(),
+                SpecificError("Invalid syntax"),
+            ),
+            // Longhand (quote ...) nesting should also be caught
+            (
+                deep_longhand_quote_at_limit.as_str(),
                 SpecificError("Invalid syntax"),
             ),
         ];
