@@ -27,12 +27,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust-version: ['msrv', 'stable']
+        rust-version: [msrv, stable]
         cargo-args:
           - '--no-default-features'
           - '--no-default-features --features scheme'
           - '--no-default-features --features jsonlogic'
           - '--no-default-features --features scheme,jsonlogic'
+        include:
+          - rust-version: stable
+            cargo-args: '--no-default-features --features scheme,jsonlogic'
+            doc-tests: true
 
     steps:
     - name: Checkout code
@@ -42,24 +46,38 @@ jobs:
       id: resolve
       shell: bash
       run: |
+        set -euo pipefail
+
         rust="${{ matrix.rust-version }}"
         [[ "$rust" == "msrv" ]] && rust="$MSRV"
         echo "toolchain=$rust" >> "$GITHUB_OUTPUT"
+
+        if [[ "${{ matrix.rust-version }}" == "stable" ]]; then
+          echo "should-run-full-checks=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "should-run-full-checks=false" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Install Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: ${{ steps.resolve.outputs.toolchain }}
-        components: ${{ matrix.rust-version == 'stable' && 'clippy' || '' }}
-
-    - name: Run tests
-      run: cargo test --all-targets ${{ matrix.cargo-args }} --verbose
+        components: ${{ steps.resolve.outputs.should-run-full-checks == 'true' && 'clippy' || '' }}
 
     - name: Run clippy
-      if: matrix.rust-version == 'stable'
+      if: steps.resolve.outputs.should-run-full-checks == 'true'
       run: cargo clippy --all-targets ${{ matrix.cargo-args }} -- -D warnings
 
-    - name: Run doc tests (all features)
+    - name: Run tests
+      if: steps.resolve.outputs.should-run-full-checks == 'true'
+      run: cargo test --all-targets ${{ matrix.cargo-args }} --verbose
+
+    - name: Check library (MSRV)
+      if: steps.resolve.outputs.should-run-full-checks != 'true'
+      run: cargo check ${{ matrix.cargo-args }} --verbose
+
+    - name: Run doc tests
+      if: matrix.doc-tests
       run: cargo test --doc --all-features
 
   coverage:
@@ -123,6 +141,8 @@ jobs:
     name: Documentation
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      RUSTDOCFLAGS: '-D warnings'
 
     steps:
     - name: Checkout code
@@ -133,9 +153,6 @@ jobs:
 
     - name: Build documentation
       run: cargo doc --all-features --no-deps
-
-    - name: Check for broken links in docs
-      run: cargo doc --all-features --no-deps 2>&1 | grep -i "warning\|error" && exit 1 || exit 0
 
   fuzz-build:
     # This job ensures the fuzz crate compiles on the nightly toolchain.
