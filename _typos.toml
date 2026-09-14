@@ -1,0 +1,15 @@
+# Configuration for `typos` (https://github.com/crate-ci/typos).
+#
+# Supported directive once these regexes are active:
+#   // spellchecker:disable-line          (must appear at end of the line)
+#
+# Prefer adding entries to `[default.extend-words]` for recurring words.
+
+[default]
+extend-ignore-re = [
+    # End-of-line disable: `// spellchecker:disable-line`
+    '(?Rm)^.*(#|//)\s*spellchecker:disable-line$',
+]
+
+[files]
+extend-exclude = ["tests/tests.txt"]
