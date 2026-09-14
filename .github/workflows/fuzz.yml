@@ -17,6 +17,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: '1'
+  RUSTFLAGS: '-D warnings'
 
 jobs:
   fuzz:
@@ -37,13 +38,12 @@ jobs:
       uses: actions/checkout@v7
 
     - name: Install Rust nightly
-      uses: dtolnay/rust-toolchain@nightly
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: nightly
 
     - name: Install cargo-fuzz
       run: cargo install cargo-fuzz
-
-    - name: Cache dependencies
-      uses: Swatinem/rust-cache@v2
 
     # Corpus caching:
     # - Save key uses run_id so each run creates a new cache (caches are immutable)

@@ -16,6 +16,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: '1'
+  RUSTFLAGS: '-D warnings'
 
 jobs:
   benchmark:
@@ -30,10 +31,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Run benchmark
         # We use --output-format bencher to make the output compatible with the
