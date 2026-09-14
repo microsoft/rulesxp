@@ -196,3 +196,32 @@ jobs:
 
     - name: Check minimal versions
       run: cargo +nightly minimal-versions check --direct --all-features
+
+  typos:
+    name: Typos
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Install typos
+      uses: taiki-e/install-action@v2
+      with:
+        tool: typos-cli
+
+    - name: Run typos
+      run: typos
+
+  workflow-lint:
+    name: Workflow Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Run actionlint
+      uses: raven-actions/actionlint@v2
