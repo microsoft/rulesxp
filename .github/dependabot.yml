@@ -13,6 +13,11 @@ updates:
     commit-message:
       prefix: "deps"
       include: "scope"
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # Enable version updates for GitHub Actions
   - package-ecosystem: "github-actions"
@@ -26,3 +31,8 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
