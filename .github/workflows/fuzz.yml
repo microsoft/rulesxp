@@ -11,8 +11,13 @@ on:
         required: false
         default: '300'
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  RUSTFLAGS: '-D warnings'
 
 jobs:
   fuzz:
@@ -33,13 +38,12 @@ jobs:
       uses: actions/checkout@v7
 
     - name: Install Rust nightly
-      uses: dtolnay/rust-toolchain@nightly
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: nightly
 
     - name: Install cargo-fuzz
       run: cargo install cargo-fuzz
-
-    - name: Cache dependencies
-      uses: Swatinem/rust-cache@v2
 
     # Corpus caching:
     # - Save key uses run_id so each run creates a new cache (caches are immutable)
@@ -63,10 +67,10 @@ jobs:
       id: check_crashes
       run: |
         if [ -d "fuzz/artifacts/${{ matrix.target }}" ] && [ "$(ls -A fuzz/artifacts/${{ matrix.target }})" ]; then
-          echo "crashes_found=true" >> $GITHUB_OUTPUT
+          echo "crashes_found=true" >> "$GITHUB_OUTPUT"
           echo "::warning::Crashes found in ${{ matrix.target }}"
         else
-          echo "crashes_found=false" >> $GITHUB_OUTPUT
+          echo "crashes_found=false" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Upload crash artifacts

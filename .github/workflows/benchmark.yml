@@ -7,22 +7,31 @@ on:
   pull_request:
 
 permissions:
-  contents: write
-  deployments: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  RUSTFLAGS: '-D warnings'
 
 jobs:
   benchmark:
     name: Run Criterion Benchmarks
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      deployments: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Run benchmark
         # We use --output-format bencher to make the output compatible with the

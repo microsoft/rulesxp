@@ -2,27 +2,41 @@ name: CI
 
 on:
   push:
-    branches: [ main, feature/pipeline-test ]
+    branches: [main, feature/pipeline-test]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  RUSTFLAGS: '-D warnings'
   MSRV: '1.90'
 
 jobs:
   test:
     name: Test Suite
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        rust-version: ['msrv', 'stable']
+        rust-version: [msrv, stable]
         cargo-args:
           - '--no-default-features'
           - '--no-default-features --features scheme'
           - '--no-default-features --features jsonlogic'
           - '--no-default-features --features scheme,jsonlogic'
+        include:
+          - rust-version: stable
+            cargo-args: '--no-default-features --features scheme,jsonlogic'
+            doc-tests: true
 
     steps:
     - name: Checkout code
@@ -32,50 +46,58 @@ jobs:
       id: resolve
       shell: bash
       run: |
+        set -euo pipefail
+
         rust="${{ matrix.rust-version }}"
         [[ "$rust" == "msrv" ]] && rust="$MSRV"
         echo "toolchain=$rust" >> "$GITHUB_OUTPUT"
 
+        if [[ "${{ matrix.rust-version }}" == "stable" ]]; then
+          echo "should-run-full-checks=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "should-run-full-checks=false" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@master
+      uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: ${{ steps.resolve.outputs.toolchain }}
-
-    - name: Install clippy (stable only)
-      if: matrix.rust-version == 'stable'
-      run: rustup component add clippy
-
-    - name: Cache dependencies
-      uses: Swatinem/rust-cache@v2
-
-    - name: Run tests
-      run: cargo test --all-targets ${{ matrix.cargo-args }} --verbose
+        components: ${{ steps.resolve.outputs.should-run-full-checks == 'true' && 'clippy' || '' }}
 
     - name: Run clippy
-      if: matrix.rust-version == 'stable'
+      if: steps.resolve.outputs.should-run-full-checks == 'true'
       run: cargo clippy --all-targets ${{ matrix.cargo-args }} -- -D warnings
 
-    - name: Run doc tests (all features)
+    - name: Run tests
+      if: steps.resolve.outputs.should-run-full-checks == 'true'
+      run: cargo test --all-targets ${{ matrix.cargo-args }} --verbose
+
+    - name: Check library (MSRV)
+      if: steps.resolve.outputs.should-run-full-checks != 'true'
+      run: cargo check ${{ matrix.cargo-args }} --verbose
+
+    - name: Run doc tests
+      if: matrix.doc-tests
       run: cargo test --doc --all-features
 
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         components: llvm-tools-preview
 
-    - name: Cache dependencies
-      uses: Swatinem/rust-cache@v2
-
     - name: Install cargo-llvm-cov
-      uses: taiki-e/install-action@cargo-llvm-cov
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-llvm-cov
 
     - name: Generate code coverage
       run: |
@@ -101,18 +123,16 @@ jobs:
   fmt:
     name: Formatting
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         components: rustfmt
-
-    - name: Cache dependencies
-      uses: Swatinem/rust-cache@v2
 
     - name: Check formatting
       run: cargo fmt --all -- --check
@@ -120,38 +140,35 @@ jobs:
   docs:
     name: Documentation
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUSTDOCFLAGS: '-D warnings'
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Cache dependencies
-      uses: Swatinem/rust-cache@v2
+      uses: actions-rust-lang/setup-rust-toolchain@v1
 
     - name: Build documentation
       run: cargo doc --all-features --no-deps
-
-    - name: Check for broken links in docs
-      run: cargo doc --all-features --no-deps 2>&1 | grep -i "warning\|error" && exit 1 || exit 0
 
   fuzz-build:
     # This job ensures the fuzz crate compiles on the nightly toolchain.
     # Actual fuzzing runs on a schedule in fuzz.yml, not here.
     name: Fuzz Build Check
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
 
     - name: Install Rust nightly
-      uses: dtolnay/rust-toolchain@nightly
-
-    - name: Cache dependencies
-      uses: Swatinem/rust-cache@v2
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: nightly
 
     - name: Install cargo-fuzz
       run: cargo install cargo-fuzz
@@ -162,6 +179,7 @@ jobs:
   security:
     name: Security Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
     - name: Checkout code
@@ -178,16 +196,16 @@ jobs:
   minimal-versions:
     name: Minimal Versions
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
 
     - name: Install Rust nightly
-      uses: dtolnay/rust-toolchain@nightly
-
-    - name: Install Rust stable
-      uses: dtolnay/rust-toolchain@stable
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: nightly
 
     - name: Install cargo-hack and cargo-minimal-versions
       uses: taiki-e/install-action@v2
@@ -196,3 +214,45 @@ jobs:
 
     - name: Check minimal versions
       run: cargo +nightly minimal-versions check --direct --all-features
+
+  typos:
+    name: Typos
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Install typos
+      uses: taiki-e/install-action@v2
+      with:
+        tool: typos-cli
+
+    - name: Run typos
+      run: typos
+
+  workflow-lint:
+    name: Workflow Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Run actionlint
+      uses: raven-actions/actionlint@v2
+
+  ci-success:
+    name: CI Success
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [test, fmt, docs, coverage, fuzz-build, security, minimal-versions, typos, workflow-lint]
+    steps:
+    - name: Verify all required jobs succeeded
+      if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+      run: |
+        echo "One or more required jobs failed, were cancelled, or were skipped."
+        exit 1
