@@ -9,7 +9,7 @@ env:
   CARGO_TERM_COLOR: always
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   create-release:
@@ -18,6 +18,8 @@ jobs:
     # Only run in non-fork repositories (e.g., the canonical repo),
     # so tags in forks don't create upstream-style releases.
     if: github.event.repository.fork == false
+    permissions:
+      contents: write   # gh release create
     outputs:
       tag_name: ${{ steps.tag_name.outputs.TAG_NAME }}
 
@@ -27,17 +29,19 @@ jobs:
 
     - name: Get tag name
       id: tag_name
-      run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
     - name: Verify tag is on main
+      shell: bash
       run: |
         git fetch origin main
-        if ! git merge-base --is-ancestor $GITHUB_SHA origin/main; then
+        if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
           echo "Error: Tag must point to a commit on the main branch"
           exit 1
         fi
 
     - name: Verify version matches tag
+      shell: bash
       run: |
         TAG_VERSION=${GITHUB_REF#refs/tags/v}
         CARGO_VERSION=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
@@ -55,12 +59,13 @@ jobs:
   publish-crate:
     name: Publish to crates.io
     runs-on: ubuntu-latest
+    needs: create-release
     # crates.io publishing is only meaningful for non-fork roots
     if: github.event.repository.fork == false
-    needs: create-release
     environment: crates-io
     permissions:
-      id-token: write  # Required for OIDC trusted publishing
+      contents: read
+      id-token: write   # Required for OIDC trusted publishing
 
     steps:
     - name: Checkout code
@@ -84,9 +89,11 @@ jobs:
   build-binaries:
     name: Build Release Binaries
     runs-on: ${{ matrix.os }}
+    needs: create-release
     # Only build and upload release binaries for non-fork repositories
     if: github.event.repository.fork == false
-    needs: create-release
+    permissions:
+      contents: write   # gh release upload
     strategy:
       matrix:
         include:
@@ -116,6 +123,7 @@ jobs:
       run: cargo build --release --example repl --all-features --target ${{ matrix.target }}
 
     - name: Prepare binary for packaging
+      shell: bash
       run: |
         mkdir -p staging
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
@@ -123,7 +131,6 @@ jobs:
         else
           cp "target/${{ matrix.target }}/release/examples/repl" staging/
         fi
-      shell: bash
 
     - name: Package binaries (Windows)
       if: matrix.os == 'windows-latest'

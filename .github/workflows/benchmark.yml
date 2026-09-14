@@ -7,8 +7,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
-  deployments: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -23,6 +22,9 @@ jobs:
     name: Run Criterion Benchmarks
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
+      deployments: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
