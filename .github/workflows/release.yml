@@ -12,9 +12,64 @@ permissions:
   contents: read
 
 jobs:
+  publish-crate:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    # crates.io publishing is only meaningful for non-fork roots
+    if: github.event.repository.fork == false
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write   # Required for OIDC trusted publishing
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        # The ancestry check needs enough history to prove the tag commit
+        # is reachable from origin/main.
+        fetch-depth: 0
+
+    - name: Verify tag is on main
+      shell: bash
+      run: |
+        git fetch origin main
+        if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+          echo "Error: Tag must point to a commit on the main branch"
+          exit 1
+        fi
+
+    - name: Install Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+        rustflags: ''
+
+    - name: Verify version matches tag
+      shell: bash
+      run: |
+        TAG_VERSION=${GITHUB_REF#refs/tags/v}
+        CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 \
+          | jq -r '.packages[] | select(.name == "rulesxp") | .version')
+        if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+          echo "Error: Tag version (v$TAG_VERSION) doesn't match Cargo.toml version ($CARGO_VERSION)"
+          exit 1
+        fi
+        echo "Version check passed: $CARGO_VERSION"
+
+    - name: Authenticate with crates.io
+      uses: rust-lang/crates-io-auth-action@v1
+      id: auth
+
+    - name: Publish to crates.io
+      run: cargo publish --locked --all-features
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
+    needs: publish-crate
     # Only run in non-fork repositories (e.g., the canonical repo),
     # so tags in forks don't create upstream-style releases.
     if: github.event.repository.fork == false
@@ -31,60 +86,16 @@ jobs:
       id: tag_name
       run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-    - name: Verify tag is on main
-      shell: bash
-      run: |
-        git fetch origin main
-        if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-          echo "Error: Tag must point to a commit on the main branch"
-          exit 1
-        fi
-
-    - name: Verify version matches tag
-      shell: bash
-      run: |
-        TAG_VERSION=${GITHUB_REF#refs/tags/v}
-        CARGO_VERSION=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
-        if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
-          echo "Error: Tag version (v$TAG_VERSION) doesn't match Cargo.toml version ($CARGO_VERSION)"
-          exit 1
-        fi
-        echo "Version check passed: $CARGO_VERSION"
-
     - name: Create Release
       env:
         GH_TOKEN: ${{ github.token }}
-      run: gh release create ${{ steps.tag_name.outputs.TAG_NAME }} --title "Release ${{ steps.tag_name.outputs.TAG_NAME }}" --generate-notes
-
-  publish-crate:
-    name: Publish to crates.io
-    runs-on: ubuntu-latest
-    needs: create-release
-    # crates.io publishing is only meaningful for non-fork roots
-    if: github.event.repository.fork == false
-    environment: crates-io
-    permissions:
-      contents: read
-      id-token: write   # Required for OIDC trusted publishing
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v7
-
-    - name: Install Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        toolchain: stable
-        rustflags: ''
-
-    - name: Authenticate with crates.io
-      uses: rust-lang/crates-io-auth-action@v1
-      id: auth
-
-    - name: Publish to crates.io
-      run: cargo publish --all-features
-      env:
-        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        TAG_NAME: ${{ steps.tag_name.outputs.TAG_NAME }}
+      run: |
+        if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+          echo "Release $TAG_NAME already exists, skipping creation."
+        else
+          gh release create "$TAG_NAME" --title "Release $TAG_NAME" --generate-notes
+        fi
 
   build-binaries:
     name: Build Release Binaries
