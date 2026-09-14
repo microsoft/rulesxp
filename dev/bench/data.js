@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789429105194,
+  "lastUpdate": 1789429303734,
   "repoUrl": "https://github.com/microsoft/rulesxp",
   "entries": {
     "RulesXP Benchmark": [
@@ -1763,6 +1763,90 @@ window.BENCHMARK_DATA = {
             "name": "Evaluation/Eval Scheme Factorial",
             "value": 135114,
             "range": "± 1828",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "git@talagrand.org",
+            "name": "Eugene",
+            "username": "talagrand"
+          },
+          "distinct": true,
+          "id": "79aa95e6315acf3cfd5e97668ff7607f5da5c2b9",
+          "message": "ci(deps): bump actions-rust-lang/setup-rust-toolchain from 1 to 2\n\nBumps [actions-rust-lang/setup-rust-toolchain](https://github.com/actions-rust-lang/setup-rust-toolchain) from 1 to 2.\n- [Release notes](https://github.com/actions-rust-lang/setup-rust-toolchain/releases)\n- [Changelog](https://github.com/actions-rust-lang/setup-rust-toolchain/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/actions-rust-lang/setup-rust-toolchain/compare/v1...v2)\n\n---\nupdated-dependencies:\n- dependency-name: actions-rust-lang/setup-rust-toolchain\n  dependency-version: '2'\n  dependency-type: direct:production\n  update-type: version-update:semver-major\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+          "timestamp": "2026-09-14T16:39:01-07:00",
+          "tree_id": "3e0ffac311f9ef3a7b53ec2f1e6460ef0e4cd6ef",
+          "url": "https://github.com/microsoft/rulesxp/commit/79aa95e6315acf3cfd5e97668ff7607f5da5c2b9"
+        },
+        "date": 1789429302882,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "Parsing/Scheme Simple",
+            "value": 796,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Nested",
+            "value": 3506,
+            "range": "± 97",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Factorial",
+            "value": 9601,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Simple",
+            "value": 467,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Nested",
+            "value": 1822,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Simple",
+            "value": 2045,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Simple",
+            "value": 1943,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Nested",
+            "value": 2299,
+            "range": "± 187",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Nested",
+            "value": 2292,
+            "range": "± 188",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Factorial",
+            "value": 142105,
+            "range": "± 982",
             "unit": "ns/iter"
           }
         ]
