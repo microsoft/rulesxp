@@ -67,10 +67,10 @@ jobs:
       id: check_crashes
       run: |
         if [ -d "fuzz/artifacts/${{ matrix.target }}" ] && [ "$(ls -A fuzz/artifacts/${{ matrix.target }})" ]; then
-          echo "crashes_found=true" >> $GITHUB_OUTPUT
+          echo "crashes_found=true" >> "$GITHUB_OUTPUT"
           echo "::warning::Crashes found in ${{ matrix.target }}"
         else
-          echo "crashes_found=false" >> $GITHUB_OUTPUT
+          echo "crashes_found=false" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Upload crash artifacts
