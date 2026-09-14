@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - CI enforces production-code-only MSRV, stricter doc and workflow checks, least-privilege permissions & job timeouts
-- Release flow uses SHA-pinning-friendly Rust installation, locked publication, pre-publish tag validation, and retry-safe GH releases
+- CI uses SHA-pinned actions, locked publication, pre-publish tag validation, and retry-safe GH releases
 
 ## 0.3.1
 
