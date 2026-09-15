@@ -14,14 +14,14 @@ path = ".."
 features = ["scheme", "jsonlogic"]
 
 [[bin]]
-name = "eval_sexpr"
+name = "eval-sexpr"
 path = "fuzz_targets/eval_sexpr.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "eval_jsonlogic"
+name = "eval-jsonlogic"
 path = "fuzz_targets/eval_jsonlogic.rs"
 test = false
 doc = false

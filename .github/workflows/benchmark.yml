@@ -36,6 +36,8 @@ jobs:
       - name: Run benchmark
         # We use --output-format bencher to make the output compatible with the
         # github-action-benchmark action's 'cargo' tool parser.
+        env:
+          CRITERION_HOME: ${{ runner.temp }}/criterion
         run: cargo bench --bench bench_main --all-features -- --output-format bencher | tee output.txt
 
       - name: Store benchmark result
