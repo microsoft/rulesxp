@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789429303734,
+  "lastUpdate": 1789433838575,
   "repoUrl": "https://github.com/microsoft/rulesxp",
   "entries": {
     "RulesXP Benchmark": [
@@ -1847,6 +1847,90 @@ window.BENCHMARK_DATA = {
             "name": "Evaluation/Eval Scheme Factorial",
             "value": 142105,
             "range": "± 982",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "git@talagrand.org",
+            "name": "Eugene Talagrand",
+            "username": "talagrand"
+          },
+          "committer": {
+            "email": "git@talagrand.org",
+            "name": "Eugene",
+            "username": "talagrand"
+          },
+          "distinct": true,
+          "id": "0bda850e0a9014ddee9a438b2adeae9701c9ba05",
+          "message": "ci: Adapt to setup-rust-toolchain v2 behavioral changes (warnings and\ncaches)",
+          "timestamp": "2026-09-14T17:54:59-07:00",
+          "tree_id": "f3072cf898055dcfc665c13730ede92f8cbda1cd",
+          "url": "https://github.com/microsoft/rulesxp/commit/0bda850e0a9014ddee9a438b2adeae9701c9ba05"
+        },
+        "date": 1789433838127,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "Parsing/Scheme Simple",
+            "value": 784,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Nested",
+            "value": 3459,
+            "range": "± 119",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/Scheme Factorial",
+            "value": 9372,
+            "range": "± 41",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Simple",
+            "value": 454,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Parsing/JSONLogic Nested",
+            "value": 1817,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Simple",
+            "value": 2022,
+            "range": "± 88",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Simple",
+            "value": 2037,
+            "range": "± 71",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Nested",
+            "value": 2258,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval JSONLogic Nested",
+            "value": 2245,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Evaluation/Eval Scheme Factorial",
+            "value": 141728,
+            "range": "± 719",
             "unit": "ns/iter"
           }
         ]
