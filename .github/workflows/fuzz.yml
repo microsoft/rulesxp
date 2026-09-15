@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: ['eval_sexpr', 'eval_jsonlogic']
+        target: ['eval-sexpr', 'eval-jsonlogic']
 
     steps:
     - name: Checkout code
