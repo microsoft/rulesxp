@@ -28,18 +28,20 @@ jobs:
       deployments: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v2
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
 
       - name: Run benchmark
         # We use --output-format bencher to make the output compatible with the
         # github-action-benchmark action's 'cargo' tool parser.
+        env:
+          CRITERION_HOME: ${{ runner.temp }}/criterion
         run: cargo bench --bench bench_main --all-features -- --output-format bencher | tee output.txt
 
       - name: Store benchmark result
-        uses: benchmark-action/github-action-benchmark@v1
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
         with:
           name: RulesXP Benchmark
           tool: 'cargo'

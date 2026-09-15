@@ -40,7 +40,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Resolve toolchain
       id: resolve
@@ -59,7 +59,7 @@ jobs:
         fi
 
     - name: Install Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v2
+      uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       with:
         toolchain: ${{ steps.resolve.outputs.toolchain }}
         components: ${{ steps.resolve.outputs.should-run-full-checks == 'true' && 'clippy' || '' }}
@@ -87,15 +87,15 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v2
+      uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       with:
         components: llvm-tools-preview
 
     - name: Install cargo-llvm-cov
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
       with:
         tool: cargo-llvm-cov
 
@@ -105,7 +105,7 @@ jobs:
         cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info --no-run
 
     - name: Upload coverage HTML
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: coverage-report
         path: coverage-html/
@@ -113,7 +113,7 @@ jobs:
 
     - name: Upload to Codecov
       if: env.CODECOV_TOKEN != ''
-      uses: codecov/codecov-action@v7
+      uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
       with:
         files: lcov.info
         fail_ci_if_error: true
@@ -127,10 +127,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v2
+      uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       with:
         components: rustfmt
 
@@ -146,10 +146,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v2
+      uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
 
     - name: Build documentation
       run: cargo doc --all-features --no-deps
@@ -163,10 +163,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install Rust nightly
-      uses: actions-rust-lang/setup-rust-toolchain@v2
+      uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       with:
         toolchain: nightly
 
@@ -183,10 +183,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install cargo-audit
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
       with:
         tool: cargo-audit
 
@@ -200,15 +200,15 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install Rust nightly
-      uses: actions-rust-lang/setup-rust-toolchain@v2
+      uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       with:
         toolchain: nightly
 
     - name: Install cargo-hack and cargo-minimal-versions
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
       with:
         tool: cargo-hack,cargo-minimal-versions
 
@@ -222,10 +222,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install typos
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
       with:
         tool: typos-cli
 
@@ -239,10 +239,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Run actionlint
-      uses: raven-actions/actionlint@v2
+      uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
 
   ci-success:
     name: CI Success

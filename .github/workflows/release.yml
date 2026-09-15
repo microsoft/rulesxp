@@ -24,7 +24,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         # The ancestry check needs enough history to prove the tag commit
         # is reachable from origin/main.
@@ -40,7 +40,7 @@ jobs:
         fi
 
     - name: Install Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v2
+      uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       with:
         toolchain: stable
         rustflags: ''
@@ -58,7 +58,7 @@ jobs:
         echo "Version check passed: $CARGO_VERSION"
 
     - name: Authenticate with crates.io
-      uses: rust-lang/crates-io-auth-action@v1
+      uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
       id: auth
 
     - name: Publish to crates.io
@@ -80,7 +80,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Get tag name
       id: tag_name
@@ -120,10 +120,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v2
+      uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       with:
         toolchain: stable
         target: ${{ matrix.target }}
