@@ -512,6 +512,8 @@ mod tests {
                 r#"{"123invalid": [1, 2]}"#,
                 SpecificError("Invalid operator name"),
             ),
+            // Invalid var names should be rejected
+            (r#"{"var": "123"}"#, SpecificError("valid symbol")),
             // Design validation tests - operations intentionally rejected/different
             (
                 r#"{"unknown_not": [true]}"#,
@@ -803,10 +805,38 @@ mod tests {
                 "{label} should fail conversion"
             );
         }
+    }
 
-        // Non-symbol list converts to JSON array
-        let list_val = Value::List(vec![Value::Number(1), Value::Number(2)]);
-        assert_eq!(ast_to_jsonlogic(&list_val).unwrap(), "[1,2]");
+    #[test]
+    fn test_ast_to_jsonlogic_roundtrip() {
+        // AST values that should convert to specific JSON representations
+        let roundtrip_cases: Vec<(Value, &str)> = vec![
+            // Non-symbol list converts to JSON array
+            (
+                Value::List(vec![Value::Number(1), Value::Number(2)]),
+                "[1,2]",
+            ),
+            // Empty list converts to empty JSON array
+            (Value::List(vec![]), "[]"),
+            // PrecompiledOp "list" roundtrips to JSON array
+            (parse_scheme("(list 1 2 3)").unwrap(), "[1,2,3]"),
+            // Unprecompiled Value::List with Symbol("list") also roundtrips to JSON array
+            (
+                Value::List(vec![
+                    Value::Symbol("list".into()),
+                    Value::Number(4),
+                    Value::Number(5),
+                ]),
+                "[4,5]",
+            ),
+        ];
+        for (value, expected_json) in &roundtrip_cases {
+            assert_eq!(
+                ast_to_jsonlogic(value).unwrap(),
+                *expected_json,
+                "Roundtrip failed for {value:?}"
+            );
+        }
     }
 
     /// Helper function to test AST equivalence and roundtrip (shared by Identical and IdenticalWithEvalError)

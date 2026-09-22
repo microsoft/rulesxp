@@ -501,6 +501,30 @@ mod helper_function_tests {
 
         assert!(builtin_fn != func); // cross-variant catch-all arm
 
+        // PartialEq: Functions with different params are not equal
+        let func_different_params =
+            eval(&parse_scheme("(lambda (y) (+ y 1))").unwrap(), &mut env).unwrap();
+        assert!(func != func_different_params);
+
+        // PartialEq: Functions with same params/body but different captured environments are not equal
+        let mut env3 = create_global_env();
+        eval(&parse_scheme("(define z 99)").unwrap(), &mut env3).unwrap();
+        let func_different_env =
+            eval(&parse_scheme("(lambda (x) (+ x 1))").unwrap(), &mut env3).unwrap();
+        assert!(func != func_different_env);
+
+        // PartialEq: PrecompiledOps with same op but different args are not equal
+        let precompiled_different_args = parse_scheme("(+ 3 4)").unwrap();
+        assert!(precompiled != precompiled_different_args);
+
+        // PartialEq: Unspecified never equals non-Unspecified values
+        assert!(Value::Unspecified != val(0));
+        assert!(Value::Unspecified != val(false));
+        assert!(Value::Unspecified != val(""));
+        assert!(Value::Unspecified != nil());
+        assert!(val(0) != Value::Unspecified);
+        assert!(val(false) != Value::Unspecified);
+
         // Error Display: (error, expected_substring)
         let error_cases: Vec<(crate::Error, &str)> = vec![
             (

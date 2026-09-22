@@ -674,6 +674,10 @@ mod tests {
                 && (add_ref.op_kind != if_ref.op_kind)
                 && (*add_ref == add_ref.clone())
         );
+
+        // BuiltinOp::eq: different builtins are not equal
+        let sub_ref = find_scheme_op("-").unwrap();
+        assert!(add_ref != sub_ref);
     }
 
     /// Macro to create test cases, invoking builtins via the registry.
